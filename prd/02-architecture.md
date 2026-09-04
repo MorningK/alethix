@@ -249,7 +249,7 @@ sequenceDiagram
 | 缓存 / 队列 | **Redis** | 7+ | 任务状态、Embedding 缓存、限流、幂等锁 |
 | 异步任务 | Celery / RQ / ARQ | — | 文档处理耗时且需重试；MVP 可用 FastAPI BackgroundTasks，生产必须独立 worker |
 | Embedding | `text-embedding-3-small` | — | 1536 维，性价比高 |
-| LLM | OpenAI 兼容端点 | — | 通过 `OPENAI_BASE_URL` 可切换 vLLM / DeepSeek / Qwen 等 |
+| LLM | OpenAI 兼容端点 | — | 通过 `LLM_BASE_URL` 可切换 vLLM / DeepSeek / Qwen 等（留空回退 `OPENAI_BASE_URL`） |
 | 文档解析 | PyMuPDF / python-docx / Unstructured / Trafilatura | — | 按格式分派，PDF 优先 PyMuPDF（快且保留页码） |
 | 流式 | SSE (`text/event-stream`) | — | 比 WebSocket 简单，天然支持断线重连；本场景只需单向推送 |
 | 观测 | OpenTelemetry + LangSmith/Phoenix | — | Trace LLM 调用链与 Token 消耗 |
@@ -368,8 +368,12 @@ flowchart LR
 
 | 变量 | 说明 | 默认值 | 必填 |
 | --- | --- | --- | --- |
-| `OPENAI_API_KEY` | LLM / Embedding 的 API Key | — | 是 |
-| `OPENAI_BASE_URL` | OpenAI 兼容端点，可切换 vLLM / DeepSeek / Qwen | `https://api.openai.com/v1` | 否 |
+| `OPENAI_API_KEY` | **通用兜底** API Key，专用变量留空时生效 | — | 是 |
+| `OPENAI_BASE_URL` | **通用兜底** 端点，专用变量留空时生效 | `https://api.openai.com/v1` | 否 |
+| `LLM_BASE_URL` | LLM 专用端点，留空回退到 `OPENAI_BASE_URL` | 空 | 否 |
+| `LLM_API_KEY` | LLM 专用 Key，留空回退到 `OPENAI_API_KEY` | 空 | 否 |
+| `EMBEDDING_BASE_URL` | Embedding 专用端点，留空回退到 `OPENAI_BASE_URL` | 空 | 否 |
+| `EMBEDDING_API_KEY` | Embedding 专用 Key，留空回退到 `OPENAI_API_KEY` | 空 | 否 |
 | `LLM_MODEL` | 主模型名称 | `gpt-4o-mini` | 是 |
 | `LLM_FALLBACK_MODEL` | 降级模型（结构化输出失败时使用） | 同 `LLM_MODEL` | 否 |
 | `LLM_TEMPERATURE` | 生成温度，决策类节点建议 0 | `0` | 否 |
@@ -380,6 +384,54 @@ flowchart LR
 | `EMBEDDING_BATCH_SIZE` | 批量向量化的批大小 | `64` | 否 |
 
 > **重要**：`EMBEDDING_DIM` 变更会导致 Qdrant Collection 不兼容。变更流程见 [04-data-model.md §6](./04-data-model.md#6-容量估算与维度变更)。
+
+#### 5.1.1 LLM 与 Embedding 的端点必须可独立配置
+
+LLM 与 Embedding 虽然都走 OpenAI 兼容接口，但**实际部署中常来自不同的服务**（例如大模型用 OpenAI、Embedding 用本地 TEI 或自建 vLLM）。若二者共用一个 `OPENAI_BASE_URL`，切换其中一侧会「误伤」另一侧。
+
+因此采用**专用变量 + 通用兜底**的两级配置：
+
+```text
+LLM 实际端点       = LLM_BASE_URL       or OPENAI_BASE_URL
+Embedding 实际端点 = EMBEDDING_BASE_URL or OPENAI_BASE_URL
+LLM 实际 Key       = LLM_API_KEY        or OPENAI_API_KEY
+Embedding 实际 Key = EMBEDDING_API_KEY  or OPENAI_API_KEY
+```
+
+| 约束 | 说明 |
+| --- | --- |
+| AG-7.1 | `LLMService` 与 `EmbeddingService` 必须分别构造独立的客户端实例（`ChatOpenAI` 与 `OpenAIEmbeddings`），各自使用解析后的端点与 Key，**禁止**共享同一 client |
+| AG-7.2 | 解析规则为「专用变量优先，留空回退通用」；空字符串视同留空 |
+| AG-7.3 | 应用启动时需打印解析后的**脱敏**端点（仅协议 + 主机 + 端口，不含 Key 与路径参数），便于排查「指错了服务」这类问题 |
+| AG-7.4 | 启动时分别对 LLM 与 Embedding 端点做一次轻量探测（`GET /models`），失败时给出明确错误并指明是哪个端点不可达（错误码 `5032001`） |
+| AG-7.5 | 禁止把 `OPENAI_BASE_URL` 或 `LLM_BASE_URL` 指向仅实现 embeddings 的服务（如 TEI）——此类服务没有 `/v1/chat/completions`，会导致全部大模型调用失败 |
+
+#### 5.1.2 本地 Embedding 可选方案（TEI）
+
+开发阶段若需离线运行或节省 Embedding API 费用，可启用 `docker-compose.yml` 中的 **TEI（text-embeddings-inference）** 服务（默认不启动，需 `--profile local-emb`）。
+
+| 项 | 说明 |
+| --- | --- |
+| 默认模型 | `BAAI/bge-m3`，dense 维度 **1024** |
+| 端口 | 宿主 `8080` → 容器 `80`（TEI 容器内监听 80） |
+| 镜像 | CPU 环境用 `cpu-1.9`；有 NVIDIA GPU 时用不带 `cpu-` 前缀的 `1.9` |
+| 提供的端点 | `/embed`、`/rerank`、`/predict`、`/embed_sparse`、`/v1/embeddings`（OpenAI 兼容） |
+| **不提供** | `/v1/chat/completions` —— 因此 **TEI 不能作为 LLM 端点** |
+
+**启用 TEI 的正确配置**（四处，缺一不可）：
+
+```bash
+EMBEDDING_BASE_URL=http://localhost:8080/v1   # 只改专用变量
+EMBEDDING_MODEL=BAAI/bge-m3
+EMBEDDING_DIM=1024                            # bge-m3 是 1024 维
+QDRANT_COLLECTION=document_chunks_bgem3       # 必须换一个新 Collection
+```
+
+`OPENAI_BASE_URL` 与 `LLM_BASE_URL` **保持指向大模型服务不动**。
+
+> **维度冲突警告**：默认方案 `text-embedding-3-small` 为 **1536 维**，与 bge-m3 的 1024 维**禁止**写入同一个 Qdrant Collection，否则检索直接报错。迁移流程见 [04-data-model.md §6.3](./04-data-model.md#63-embedding-维度变更流程)。
+>
+> **端点警告**：切勿将 `OPENAI_BASE_URL` 或 `LLM_BASE_URL` 指向 TEI。TEI 只实现 embeddings，指向它会使「查询规划 / 证据分析 / 充分性判断 / 生成答案」四个节点的 LLM 调用全部失败（违反 [AG-7.5](#511-llm-与-embedding-的端点必须可独立配置)）。
 
 ### 5.2 存储
 
@@ -436,7 +488,7 @@ flowchart LR
 ## 6. 目标工程目录结构
 
 ```text
-book-reader/
+alethix/
 ├── app/
 │   ├── main.py                     # FastAPI 应用入口、生命周期、全局异常处理
 │   ├── api/

@@ -1,6 +1,6 @@
-# 智能阅读检索解答智能体 · 文档集
+# 探赜（Alethix）· 文档集
 
-> **Book Reader** —— 一个基于 LangGraph + Qdrant + FastAPI 的 **Agentic / Iterative RAG（智能调研式检索增强问答）** 系统。
+> **Alethix（探赜）** —— 一个基于 LangGraph + Qdrant + FastAPI 的 **Agentic / Iterative RAG（智能调研式检索增强问答）** 系统。
 
 本文档集由项目根目录下的 [`draft.md`](../draft.md) 初步草稿细化而来，是该项目**唯一的产品与技术事实来源**，用于指导后续研发、测试与验收。
 
@@ -126,7 +126,7 @@
 | --- | --- | --- |
 | Web 框架 | FastAPI（Python 3.11+，全异步） | — |
 | Agent 编排 | **LangGraph** Graph API | 五节点显式状态机 |
-| LLM 接入 | OpenAI 兼容接口，`with_structured_output` | 通过 `OPENAI_BASE_URL` 切换端点 |
+| LLM 接入 | OpenAI 兼容接口，`with_structured_output` | LLM 与 Embedding 端点可独立配置：`LLM_BASE_URL` / `EMBEDDING_BASE_URL`，留空回退 `OPENAI_BASE_URL` |
 | Embedding | `text-embedding-3-small` | **1536 维**，COSINE |
 | 向量库 | Qdrant | Collection `document_chunks`，命名向量 `dense` |
 | 关系库 | PostgreSQL 15+ | SQLAlchemy 2.x + Alembic |

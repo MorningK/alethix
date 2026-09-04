@@ -108,7 +108,8 @@ flowchart LR
 | RSK-11 | **多用户数据越权** | 高（安全） | 低 | `user_id` 强制进入 Qdrant Filter；越权一律 `404`；代码评审 checklist | [AG-1.2](./03-agent-design.md#61-检索范围过滤强制约束)、[QF-1](./04-data-model.md#43-filter-构造规范) |
 | RSK-12 | Embedding 维度变更导致索引失效 | 中 | 低 | Collection 版本化 + 双写回灌 + 切流的五阶段迁移流程 | [§6.3](./04-data-model.md#63-embedding-维度变更流程) |
 | RSK-13 | PG 与 Qdrant 数据不一致 | 中 | 中 | 先 PG 后 Qdrant 的写入顺序；对账任务；Qdrant 可由 PG 重建 | [§5](./04-data-model.md#5-数据流转与一致性策略) |
-| RSK-14 | LLM 供应商不可用或限流 | 中 | 中 | 重试 + 退避；明确返回 `503` 而非空答案；可切换 `OPENAI_BASE_URL` | [NFR-2.4](./01-prd.md#52-可靠性与可用性) |
+| RSK-14 | LLM 供应商不可用或限流 | 中 | 中 | 重试 + 退避；明确返回 `503` 而非空答案；可切换 `LLM_BASE_URL` | [NFR-2.4](./01-prd.md#52-可靠性与可用性) |
+| RSK-17 | **LLM 与 Embedding 端点被误配到同一地址** | 高（全部大模型调用失败） | 中 | 拆分为 `LLM_BASE_URL` / `EMBEDDING_BASE_URL` 两级配置；启动时分别探测并打印脱敏端点 | [AG-7.1 ~ AG-7.5](./02-architecture.md#511-llm-与-embedding-的端点必须可独立配置) |
 | RSK-15 | 解析质量差导致「垃圾进垃圾出」 | 高 | 中 | 按格式选型解析器；解析后校验文本量，异常时明确报 `4001004` | [02 §2.1](./02-architecture.md#21-流程一文档入库ingestion) |
 | RSK-16 | 平均轮次过高导致延迟不可接受 | 中 | 中 | 优化充分性判断 Prompt（避免「追求穷尽」）；MVP 设 `max_iterations=3` | [AG-3.4 Prompt](./03-agent-design.md#74-prompt-三充分性判断decide_next_step) |
 
