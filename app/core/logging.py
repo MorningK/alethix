@@ -46,6 +46,49 @@ _RESERVED = {
 }
 
 
+# logging.LogRecord 的内置属性。若出现在 extra 中，logging 会抛
+# KeyError("Attempt to overwrite 'xxx' in LogRecord")，导致该条日志无法输出。
+# 曾因 extra={"created": ...} 触发过，故此处集中声明并做防护。
+LOG_RECORD_RESERVED: frozenset[str] = frozenset(
+    {
+        "args",
+        "asctime",
+        "created",
+        "exc_info",
+        "exc_text",
+        "filename",
+        "funcName",
+        "levelname",
+        "levelno",
+        "lineno",
+        "message",
+        "module",
+        "msecs",
+        "msg",
+        "name",
+        "pathname",
+        "process",
+        "processName",
+        "relativeCreated",
+        "stack_info",
+        "taskName",
+        "thread",
+        "threadName",
+    }
+)
+
+
+def safe_extra(**fields: Any) -> dict[str, Any]:
+    """构造可安全传给 extra 的字典：与 LogRecord 保留属性冲突的键会被重命名。
+
+    例：safe_extra(created=True) -> {"field_created": True}
+    """
+    safe: dict[str, Any] = {}
+    for key, value in fields.items():
+        safe[f"field_{key}" if key in LOG_RECORD_RESERVED else key] = value
+    return safe
+
+
 class JsonFormatter(logging.Formatter):
     """将日志记录渲染为单行 JSON。"""
 

@@ -17,7 +17,7 @@ from fastapi.responses import JSONResponse
 
 from app.core.config import get_settings
 from app.core.errors import ERR_INTERNAL, ApiError, error_response
-from app.core.logging import get_logger, setup_logging, trace_id_var, user_id_var
+from app.core.logging import get_logger, safe_extra, setup_logging, trace_id_var, user_id_var
 from app.db import postgres, redis
 from app.services import qdrant_service
 
@@ -32,11 +32,11 @@ async def lifespan(app: FastAPI):
 
     logger.info(
         "应用启动",
-        extra={
-            "app_env": settings.app_env,
-            "llm_base_url": settings.resolved_llm_base_url,
-            "embedding_base_url": settings.resolved_embedding_base_url,
-        },
+        extra=safe_extra(
+            app_env=settings.app_env,
+            llm_base_url=settings.resolved_llm_base_url,
+            embedding_base_url=settings.resolved_embedding_base_url,
+        ),
     )
 
     # 初始化各中间件连接；任一失败不影响启动，由健康检查暴露
@@ -46,12 +46,17 @@ async def lifespan(app: FastAPI):
 
     try:
         created = qdrant_service.ensure_collection(settings)
+    except Exception as exc:  # noqa: BLE001
+        # 仅包裹初始化本身；成功日志放在 else 中，避免日志异常被误报为初始化失败
+        logger.error("Qdrant collection 初始化失败：%s", exc, exc_info=exc)
+    else:
         logger.info(
             "Qdrant collection 就绪",
-            extra={"collection": settings.qdrant_collection, "created": created},
+            extra=safe_extra(
+                collection=settings.qdrant_collection,
+                collection_created=created,
+            ),
         )
-    except Exception as exc:  # noqa: BLE001
-        logger.error("Qdrant collection 初始化失败：%s", exc)
 
     yield
 
