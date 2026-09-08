@@ -1,0 +1,47 @@
+/* Tailwind CSS v4：CSS-first 配置，无 tailwind.config.js
+ *
+ * 默认 `@import "tailwindcss";` 会注入 preflight，而 Ant Design 自带 reset，
+ * 二者叠加会互相覆盖基础样式。因此按官方做法分别导入并【省略 preflight.css】。
+ * 参考：https://tailwindcss.com/docs/preflight#disabling-preflight
+ */
+@layer theme, base, components, utilities;
+
+@import 'tailwindcss/theme.css' layer(theme);
+@import 'tailwindcss/utilities.css' layer(utilities);
+@import 'tw-animate-css';
+
+/* `static` 是必需的：Tailwind v4 默认会摇树掉未被工具类引用的主题变量，
+ * 而下面这些变量由本文件的原生 CSS（body 等）直接使用，必须强制输出。 */
+@theme static {
+  --font-sans: 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+
+  /* 主色 */
+  --color-brand: #2563eb;
+  --color-brand-dark: #1d4ed8;
+  --color-brand-light: #3b82f6;
+
+  /* 背景与文字 */
+  --color-canvas: #f7f8fa;
+  --color-surface: #ffffff;
+  --color-ink: #1f2329;
+  --color-ink-muted: #646a73;
+
+  /* 功能色 */
+  --color-success: #00b42a;
+  --color-warning: #ff7d00;
+  --color-danger: #f53f3f;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background-color: var(--color-canvas);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-size: 14px;
+}
