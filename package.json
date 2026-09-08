@@ -2,7 +2,7 @@
   "name": "alethix-tooling",
   "version": "1.0.0",
   "private": true,
-  "description": "Alethix（探赜）仓库级工具链：oxlint + prettier + husky + lint-staged（不含业务代码）",
+  "description": "Alethix（探赜）仓库级工具链：oxlint + oxfmt + husky + lint-staged（不含业务代码）",
   "scripts": {
     "prepare": "husky",
     "lint": "oxlint web/src",
