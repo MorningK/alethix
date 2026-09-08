@@ -1,0 +1,22 @@
+{
+  "name": "alethix-tooling",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Alethix（探赜）仓库级工具链：oxlint + prettier + husky + lint-staged（不含业务代码）",
+  "scripts": {
+    "prepare": "husky",
+    "lint": "oxlint web/src",
+    "lint:fix": "oxlint --fix web/src",
+    "format": "oxfmt",
+    "format:check": "oxfmt --check",
+    "lint:py": "uv run ruff check app workers scripts tests",
+    "lint:py:fix": "uv run ruff check --fix app workers scripts tests",
+    "format:py": "uv run ruff format app workers scripts tests"
+  },
+  "devDependencies": {
+    "husky": "9.1.7",
+    "lint-staged": "17.5.0",
+    "oxfmt": "0.67.0",
+    "oxlint": "1.82.0"
+  }
+}

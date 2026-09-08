@@ -1,0 +1,44 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+
+  // plugins 会覆盖默认插件集，因此必须把需要的全部列出来
+  "plugins": ["react", "react-perf", "typescript", "unicorn", "oxc", "import"],
+
+  "categories": {
+    "correctness": "error",
+    "suspicious": "warn",
+    // pedantic 误报较多，暂不开启
+    "pedantic": "off"
+  },
+
+  "env": {
+    "browser": true,
+    "es2022": true
+  },
+
+  "ignorePatterns": ["node_modules", "dist", "build", ".venv", ".husky/_"],
+
+  "rules": {
+    // 规范要求用 console.error 输出错误，不禁用 console
+    "no-console": "off",
+    "no-unused-vars": "warn",
+    "typescript/no-explicit-any": "warn",
+    // 使用 automatic JSX runtime（tsconfig jsx: react-jsx），无需 import React
+    "react/react-in-jsx-scope": "off",
+    // Vite 下 `import './index.css'` 是合法的副作用导入
+    "import/no-unassigned-import": "off",
+    // axios 默认导出同时具名导出 create，属误报
+    "import/no-named-as-default-member": "off"
+  },
+
+  "overrides": [
+    {
+      "files": ["**/*.{test,spec}.{ts,tsx}"],
+      "env": { "node": true }
+    },
+    {
+      "files": ["web/vite.config.ts", "web/tailwind.config.ts"],
+      "env": { "node": true }
+    }
+  ]
+}

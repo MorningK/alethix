@@ -1,0 +1,37 @@
+{
+  "$schema": "./node_modules/oxfmt/configuration_schema.json",
+
+  // 与迁移前的 Prettier 配置保持一致
+  "printWidth": 100,
+  "tabWidth": 2,
+  "semi": true,
+  "singleQuote": true,
+  "trailingComma": "all",
+
+  // 自动排序 Tailwind class，减少 diff 噪音
+  "sortTailwindcss": true,
+
+  // oxfmt 默认开启；显式声明以免后续版本变更默认值时行为漂移
+  "sortPackageJson": true,
+
+  // 由 .prettierignore 迁移而来；注意：此处路径相对于本配置文件所在目录（仓库根）
+  "ignorePatterns": [
+    "node_modules",
+    "dist",
+    "build",
+    ".vite",
+    "*.tsbuildinfo",
+
+    ".venv",
+    "uv.lock",
+    ".pytest_cache",
+    ".ruff_cache",
+    "__pycache__",
+
+    ".husky/_",
+
+    // 既有文档：避免一次性格式化产生大 diff，后续可按需放开
+    "prd/",
+    "draft.md"
+  ]
+}

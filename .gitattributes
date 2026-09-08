@@ -1,0 +1,32 @@
+# 统一换行符为 LF。
+# 原因：Prettier 配置 endOfLine: "lf"，而 Windows 默认 core.autocrlf=true 会在
+# 检出时转成 CRLF，导致每次提交都出现整文件 diff。此文件强制仓库与工作区都用 LF。
+* text=auto eol=lf
+
+# 明确声明为文本的文件类型
+*.ts   text eol=lf
+*.tsx  text eol=lf
+*.js   text eol=lf
+*.mjs  text eol=lf
+*.json text eol=lf
+*.css  text eol=lf
+*.html text eol=lf
+*.md   text eol=lf
+*.py   text eol=lf
+*.toml text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+*.sh   text eol=lf
+
+# 二进制文件不做换行转换
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.svg  binary
+*.pdf  binary
+*.woff  binary
+*.woff2 binary
+*.ttf   binary
+*.eot   binary

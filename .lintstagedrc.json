@@ -1,0 +1,6 @@
+{
+  "web/src/**/*.{ts,tsx}": ["oxlint --fix", "oxfmt"],
+  "web/src/**/*.css": ["oxfmt"],
+  "*.{json,md,yml,yaml}": ["oxfmt --no-error-on-unmatched-pattern"],
+  "{app,workers,scripts,tests}/**/*.py": ["uv run ruff check --fix", "uv run ruff format"]
+}
