@@ -39,6 +39,7 @@
 | 4 | [04-data-model.md](./04-data-model.md) | **数据模型**：PostgreSQL DDL、Qdrant Collection 与 Payload、Redis 键设计、一致性策略 | 研发 / DBA |
 | 5 | [05-api-spec.md](./05-api-spec.md) | **接口规范**：REST 接口、SSE 事件契约、统一错误码、限流策略 | 前端 / 研发 |
 | 6 | [06-roadmap-and-risks.md](./06-roadmap-and-risks.md) | **演进路线与质量保障**：五阶段路线、里程碑、风险登记表、测试与观测方案 | 全体 |
+| 7 | [07-frontend.md](./07-frontend.md) | **前端 Web 实现路线**：技术选型、页面与组件划分、SSE 调研过程渲染、状态管理、里程碑 | 前端 / 研发 |
 
 ### 依赖关系
 
@@ -50,8 +51,9 @@
 03-agent-design.md ──┐
 04-data-model.md   ──┼──（三者平级，共同细化架构）
 05-api-spec.md     ──┘
-    ↓
-06-roadmap-and-risks.md  （定义「分几步做、有什么风险」）
+    ↓                 ↓
+06-roadmap-and-risks.md   07-frontend.md
+（分几步做、有什么风险）  （前端实现路线，依赖接口契约）
 ```
 
 ---
