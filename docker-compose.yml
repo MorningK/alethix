@@ -30,7 +30,6 @@
 name: alethix
 
 services:
-
   # ---------------------------------------------------------------------------
   # Qdrant —— 向量库
   # ---------------------------------------------------------------------------
@@ -38,15 +37,18 @@ services:
   # Collection 由应用层脚本 scripts/init_qdrant.py 创建，不在本文件定义。
   # ---------------------------------------------------------------------------
   qdrant:
+    # 固定 1.12.x：与 qdrant-client 版本约束保持一致（见 pyproject.toml）。
+    # 注意：Qdrant 存储格式跨大版本不保证兼容，升级前必须确认已有卷可迁移，
+    #       切勿直接改版本号后重建（会导致已有 segment 反序列化失败）。
     image: qdrant/qdrant:v1.12.1
     container_name: alethix-qdrant
     restart: unless-stopped
 
     ports:
       # REST / HTTP 接口，同时提供 Dashboard 与 healthz / readyz
-      - "${QDRANT_HTTP_PORT:-6333}:6333"
+      - '${QDRANT_HTTP_PORT:-6333}:6333'
       # gRPC 接口，qdrant-client 的推荐通道，性能优于 REST
-      - "${QDRANT_GRPC_PORT:-6334}:6334"
+      - '${QDRANT_GRPC_PORT:-6334}:6334'
 
     environment:
       # 仅在调试阶段打开，会显著增加日志量
@@ -59,7 +61,8 @@ services:
       - qdrant_storage:/qdrant/storage
 
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:6333/readyz || exit 1"]
+      # 注意：官方 qdrant 镜像内没有 curl / wget / nc，只能用 bash 的 /dev/tcp 探测端口
+      test: ['CMD-SHELL', "bash -c 'exec 3<>/dev/tcp/127.0.0.1/6333'"]
       interval: 10s
       timeout: 5s
       retries: 12
@@ -81,7 +84,7 @@ services:
     restart: unless-stopped
 
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - '${POSTGRES_PORT:-5432}:5432'
 
     environment:
       # :? 语法表示变量缺失时直接报错退出，避免空密码导致容器反复重启却看不出原因
@@ -89,7 +92,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?请复制 .env.example 为 .env 并设置 POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB:-alethix}
       # 显式指定 UTF-8 与默认排序规则，避免不同平台初始化出不一致的 locale
-      POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --locale=C"
+      POSTGRES_INITDB_ARGS: '--encoding=UTF-8 --locale=C'
       TZ: UTC
       PGTZ: UTC
 
@@ -97,7 +100,7 @@ services:
       - postgres_data:/var/lib/postgresql/data
 
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-alethix} -d ${POSTGRES_DB:-alethix}"]
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-alethix} -d ${POSTGRES_DB:-alethix}']
       interval: 10s
       timeout: 5s
       retries: 12
@@ -118,17 +121,17 @@ services:
     restart: unless-stopped
 
     ports:
-      - "${REDIS_PORT:-6379}:6379"
+      - '${REDIS_PORT:-6379}:6379'
 
     # 开启 AOF，开发期重启容器不丢失任务状态与限流计数。
     # 如需限制内存，可追加：--maxmemory 512mb --maxmemory-policy allkeys-lru
-    command: ["redis-server", "--appendonly", "yes"]
+    command: ['redis-server', '--appendonly', 'yes']
 
     volumes:
       - redis_data:/data
 
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ['CMD', 'redis-cli', 'ping']
       interval: 10s
       timeout: 5s
       retries: 12
@@ -193,14 +196,14 @@ services:
 
     ports:
       # 宿主 8080 → 容器 80
-      - "${TEI_PORT:-8080}:80"
+      - '${TEI_PORT:-8080}:80'
 
     volumes:
       # HuggingFace 模型缓存，避免每次重建容器都重新下载（bge-m3 约 2.2 GB）
       - tei_cache:/data
 
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:80/health || exit 1"]
+      test: ['CMD-SHELL', 'curl -sf http://localhost:80/health || exit 1']
       interval: 15s
       timeout: 5s
       retries: 20
