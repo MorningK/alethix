@@ -551,11 +551,16 @@ alethix/
 │       └── test_answer_quality.py
 ├── data/
 │   └── files/                      # 原始文件（生产应改为对象存储）
+├── web/                            # 前端工程（React 19 + Vite 8 + TS 7 + AntD 6 + Tailwind 4）
 ├── prd/                            # 本文档集
 ├── .env.example
 ├── docker-compose.yml
-└── requirements.txt
+├── pyproject.toml                  # 依赖声明（uv 管理）
+└── uv.lock                         # 锁定版本，需提交以保证可复现
 ```
+
+> **依赖管理**：后端使用 **uv + `pyproject.toml`**（不再使用 `requirements.txt`）。
+> `uv.lock` 必须提交到版本库；安装依赖用 `uv sync`，运行命令用 `uv run <cmd>`。
 
 ---
 

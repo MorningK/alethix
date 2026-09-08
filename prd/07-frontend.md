@@ -55,17 +55,22 @@
 
 | 层次 | 选型 | 版本 | 理由 |
 | --- | --- | --- | --- |
-| 框架 | React | 18 | 类型系统与后端 Pydantic 契约可形成对照；生态最成熟 |
-| 语言 | TypeScript | 5 | 接口字段多且嵌套深（`iterations` / `citations` / SSE 事件），类型约束收益显著 |
-| 构建 | Vite | 5 | 冷启动快、HMR 好、`server.proxy` 配置简单（关键：用它规避 CORS） |
-| 组件库 | Ant Design | 5 | `Upload` / `Table` / `Timeline` / `Tag` / `Alert` / `Collapse` 与本文档类界面高度契合，无需自建基础组件 |
-| 路由 | React Router | 6 | 事实标准，支持 `/chat/:sessionId` 动态段 |
-| 服务端状态 | TanStack Query | 5 | 缓存 / 失效 / 重试开箱即用，`refetchInterval` 天然适配「2 秒轮询文档状态」 |
-| 客户端状态 | Zustand | 5 | 仅需承载 `currentSessionId`、`selectedDocIds` 等少量 UI 状态，不必引入 Redux |
-| SSE 客户端 | `@microsoft/fetch-event-source` | 2 | **关键选型**，原因见 [§2.2](#22-关键决策为什么不能用原生-eventsource) |
-| HTTP 客户端 | axios | 1 | 拦截器便于统一注入 `X-User-Id`、统一解析 `{ error }` 结构 |
-| 时间 | dayjs | 1 | AntD 已内置，体积小 |
-| 图表 | 暂不引入 | — | MVP 无图表需求；如后续加观测面板再评估 |
+| 框架 | React | **19.2.8** | 类型系统与后端 Pydantic 契约可形成对照；生态最成熟 |
+| 语言 | TypeScript | **7.0.2** | 接口字段多且嵌套深（`iterations` / `citations` / SSE 事件），类型约束收益显著 |
+| 构建 | Vite | **8.2.2** | 冷启动快、HMR 好、`server.proxy` 配置简单（关键：用它规避 CORS） |
+| 组件库 | Ant Design | **6.6.3** | `Upload` / `Table` / `Timeline` / `Tag` / `Alert` / `Collapse` 与本文档类界面高度契合；AntD 6 原生支持 React 19 |
+| 路由 | React Router | **7.18.3** | 事实标准，声明式 API 与 v6 基本一致，支持 `/chat/:sessionId` 动态段 |
+| 服务端状态 | TanStack Query | **5.102.8** | 缓存 / 失效 / 重试开箱即用，`refetchInterval` 天然适配「2 秒轮询文档状态」 |
+| 客户端状态 | Zustand | **5.0.15** | 仅需承载 `currentSessionId`、`selectedDocIds` 等少量 UI 状态，不必引入 Redux |
+| SSE 客户端 | `@microsoft/fetch-event-source` | **2.0.1** | **关键选型**，原因见 [§2.2](#22-关键决策为什么不能用原生-eventsource) |
+| HTTP 客户端 | axios | **1.20.0** | 拦截器便于统一注入 `X-User-Id`、统一解析 `{ error }` 结构 |
+| 样式辅助 | Tailwind CSS + `@tailwindcss/vite` | **4.3.3** | 仅用于 flex 布局与间距；**必须禁用 preflight**，见 [§2.4](#24-tailwind-v4-的配置差异) |
+| 样式工具 | tailwind-merge / tw-animate-css | **3.6.0 / 1.4.0** | `tw-animate-css` 是 `tailwindcss-animate` 在 v4 的替代 |
+| 图标 | lucide-react / react-icons | **1.42.0 / 5.7.0** | — |
+| 图表 | recharts | **3.10.1** | MVP 暂无图表，先入依赖备用 |
+| 时间 | dayjs | **1.11.23** | AntD 已内置，体积小 |
+
+> 版本于 2026-09-08 用 `npm view <pkg> version` 实测确认为最新稳定版，并在 `web/package.json` 中锁定。
 
 ### 2.2 关键决策：为什么不能用原生 `EventSource`
 
@@ -94,6 +99,30 @@
 | FE-SSE-2 | 断线重连时携带 `Last-Event-ID` 请求头；服务端保留最近 100 个事件用于重放 | [SSE-1](./05-api-spec.md#44-传输约定) |
 | FE-SSE-3 | 组件卸载、切换会话、用户点「停止」时必须 `abort()`，通知服务端取消图执行 | [SSE-4](./05-api-spec.md#44-传输约定) |
 | FE-SSE-4 | 事件载荷**不含**原文全文（后端已裁剪），前端不得假设能拿到 chunk 正文 | [SSE-5](./05-api-spec.md#44-传输约定) |
+
+### 2.4 Tailwind v4 的配置差异
+
+Tailwind v4 与 v3 的机制完全不同，实现时必须注意：
+
+| 差异 | v3 | v4 |
+| --- | --- | --- |
+| 配置文件 | `tailwind.config.js` | **无配置文件**，改用 CSS-first（`@theme`） |
+| 集成方式 | postcss + autoprefixer | **`@tailwindcss/vite` 插件**（不再需要 postcss） |
+| 禁用 preflight | `corePlugins: { preflight: false }` | **省略 `@import "tailwindcss/preflight.css"`** |
+| 自定义主题 | JS 对象 | CSS 的 `@theme` 指令 |
+| 动画插件 | `tailwindcss-animate` | `tw-animate-css` |
+
+**禁用 preflight 的写法**（`src/index.css`）：
+
+```css
+@layer theme, base, components, utilities;
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);   /* 无 preflight.css */
+```
+
+> **坑**：`@theme { }` 中的变量若未被任何工具类引用，会被 Tailwind 摇树剔除。
+> 当这些变量由原生 CSS（如 `body { background: var(--color-canvas) }`）使用时，
+> 必须改用 **`@theme static { }`** 强制输出，否则样式静默失效。
 
 ---
 
