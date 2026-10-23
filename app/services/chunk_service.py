@@ -24,8 +24,8 @@ _CHARS_PER_TOKEN_FALLBACK = 4
 
 _token_counter: Callable[[str], int] | None = None
 
-# 句子边界：中英文句读与换行
-_SENTENCE_SPLIT_RE = r"(?<=[。！？；!?;])\s*|\n+"
+# 句子边界：中英文句读与换行。英文句点要求后跟空白，避免切开 3.5 这类小数
+_SENTENCE_SPLIT_RE = r"(?<=[。！？；!?;])\s*|(?<=\.)\s+|\n+"
 
 
 @dataclass

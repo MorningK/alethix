@@ -49,10 +49,17 @@ class IngestWorker:
 
     async def run(self) -> None:
         setup_logging(self._settings)
+        # 入口（python -m workers）不会预先初始化中间件连接，必须在此处初始化
+        self.init_clients()
         logger.info("ingest worker 启动", extra=safe_extra(queues=list(_QUEUES)))
         try:
             while not self._stopping:
-                task = await redis_db.pop_task(_QUEUES, timeout=5)
+                try:
+                    task = await redis_db.pop_task(_QUEUES, timeout=5)
+                except Exception as exc:  # noqa: BLE001  # Redis 抖动不致死 worker
+                    logger.warning("队列弹出失败，1s 后重试：%s", exc)
+                    await asyncio.sleep(1)
+                    continue
                 if task is None:
                     continue
                 queue_name, document_id = task

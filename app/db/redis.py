@@ -110,8 +110,17 @@ async def enqueue_purge(document_id: str) -> None:
 
 
 async def pop_task(queues: Sequence[str], timeout: int = 5) -> tuple[str, str] | None:
-    """阻塞弹出任务，返回 (队列名, document_id)；超时返回 None。"""
-    result = await get_redis().blpop(list(queues), timeout=timeout)
+    """阻塞弹出任务，返回 (队列名, document_id)；超时返回 None。
+
+    BLPOP 的服务端阻塞时间必须小于客户端 socket_timeout——redis-py 不会为阻塞命令
+    延长 socket 超时，否则空闲时连接先被客户端断开并抛 TimeoutError。无 socket_timeout
+    配置时保持调用方传入的 timeout。
+    """
+    client = get_redis()
+    socket_timeout = client.connection_pool.connection_kwargs.get("socket_timeout")
+    if socket_timeout is not None:
+        timeout = min(timeout, max(1, int(socket_timeout) - 1))
+    result = await client.blpop(list(queues), timeout=timeout)
     if result is None:
         return None
     queue_name, document_id = result

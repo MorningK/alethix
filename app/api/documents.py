@@ -15,6 +15,7 @@ import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, File, Form, Query, Response, UploadFile, status
+from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
 from app.api.deps import CurrentUserId, DbSession, SettingsDep
@@ -85,7 +86,9 @@ async def upload_document(
         except ValueError:
             raise ApiError(ERR_DOC_PARAM, "session_id 必须是合法 UUID", status=400) from None
 
-    data = await file.read()
+    # 有上限读取：最多读 limit + 1 字节，超限数据仍由 validate_upload 拒绝（4001003），
+    # 避免超大 Body 被整体载入内存
+    data = await file.read(settings.max_file_size_bytes + 1)
     source_format = document_service.validate_upload(filename, data, settings)
     content_hash = document_service.compute_content_hash(data)
 
@@ -95,7 +98,9 @@ async def upload_document(
         response.status_code = status.HTTP_200_OK
         return _upload_response(existing, deduplicated=True)
 
-    # 配额校验（4001005）
+    # 配额校验（4001005）：advisory 锁按用户串行化「计数 → 插入」，
+    # 与后续 insert/commit 处于同一事务，锁随事务结束释放；并发同内容上传仍由唯一索引兜底
+    await db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:uid))"), {"uid": user_id})
     count = await document_service.count_user_documents(db, user_id)
     document_service.check_quota(count)
 
@@ -145,7 +150,9 @@ async def get_document_status(
     Redis doc:task 快路径（高频轮询，中间状态由 worker 每阶段广播），
     miss 或越权回退 PostgreSQL 权威数据。
     """
-    _ensure_document_id(document_id)
+    # 归一化为规范小写 UUID：uuid.UUID 接受大写/花括号/无连字符写法，
+    # 而 Redis 键与 Qdrant doc_id 匹配均大小写敏感
+    document_id = _ensure_document_id(document_id)
 
     try:
         cached = await redis_db.get_doc_task(document_id)
@@ -211,7 +218,8 @@ async def delete_document(
 
     仅 ready / failed 状态可删除（处理中需先取消任务，4091002）。
     """
-    _ensure_document_id(document_id)
+    # 归一化为规范小写 UUID（缓存键 / purge 入队 / Qdrant doc_id 过滤一致）
+    document_id = _ensure_document_id(document_id)
 
     document = await document_service.get_document(db, document_id, user_id)
     if document is None:

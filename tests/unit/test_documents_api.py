@@ -32,11 +32,16 @@ HEADERS = {"X-User-Id": USER_ID}
 
 
 class DummySession:
-    """仅实现路由用到的提交 / 回滚。"""
+    """仅实现路由用到的执行 / 提交 / 回滚。"""
 
     def __init__(self) -> None:
         self.commits = 0
         self.rollbacks = 0
+        self.executed: list = []
+
+    async def execute(self, stmt, params=None):
+        self.executed.append((str(stmt), params))
+        return None
 
     async def commit(self) -> None:
         self.commits += 1
