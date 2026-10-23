@@ -19,10 +19,12 @@ from qdrant_client.models import (
     Distance,
     FieldCondition,
     Filter,
+    FilterSelector,
     HnswConfigDiff,
     MatchAny,
     MatchValue,
     PayloadSchemaType,
+    PointStruct,
     Range,
     VectorParams,
 )
@@ -155,3 +157,66 @@ def collection_info(settings: Settings) -> dict[str, Any]:
         }
     except Exception as exc:  # noqa: BLE001
         return {"initialized": True, "error": str(exc)}
+
+
+def upsert_points(
+    settings: Settings,
+    points: Sequence[tuple[str, list[float], dict[str, Any]]],
+    batch_size: int = 100,
+) -> int:
+    """批量写入 Point（chunk_id 即 Point ID，命名向量 dense）。
+
+    points: (point_id, vector, payload)；payload 必含 user_id / doc_id / chunk_index。
+    分批 upsert 且 wait=True，确保返回时已可检索（M1 失败回滚依赖此语义）。
+    返回写入的点数。
+    """
+    client = get_qdrant()
+    written = 0
+    for start in range(0, len(points), batch_size):
+        batch = points[start : start + batch_size]
+        client.upsert(
+            collection_name=settings.qdrant_collection,
+            points=[
+                PointStruct(id=point_id, vector={"dense": vector}, payload=payload)
+                for point_id, vector, payload in batch
+            ],
+            wait=True,
+        )
+        written += len(batch)
+    return written
+
+
+def delete_by_document_id(settings: Settings, user_id: str, document_id: str) -> None:
+    """删除某文档的全部 Point（失败回滚 / 删除清理，幂等）。
+
+    user_id 无条件附加（QF-1），避免越权删除。
+    """
+    client = get_qdrant()
+    client.delete(
+        collection_name=settings.qdrant_collection,
+        points_selector=FilterSelector(
+            filter=Filter(
+                must=[
+                    FieldCondition(key="user_id", match=MatchValue(value=user_id)),
+                    FieldCondition(key="doc_id", match=MatchValue(value=document_id)),
+                ]
+            )
+        ),
+        wait=True,
+    )
+
+
+def count_by_document_id(settings: Settings, user_id: str, document_id: str) -> int:
+    """统计某文档在 Qdrant 中的 Point 数（对账预留）。"""
+    client = get_qdrant()
+    result = client.count(
+        collection_name=settings.qdrant_collection,
+        count_filter=Filter(
+            must=[
+                FieldCondition(key="user_id", match=MatchValue(value=user_id)),
+                FieldCondition(key="doc_id", match=MatchValue(value=document_id)),
+            ]
+        ),
+        exact=True,
+    )
+    return int(result.count)
