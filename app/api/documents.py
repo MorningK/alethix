@@ -10,7 +10,9 @@ API-5 DELETE /documents/{document_id}           删除文档
 
 from __future__ import annotations
 
+import asyncio
 import uuid
+from pathlib import Path
 
 from fastapi import APIRouter, File, Form, Query, Response, UploadFile, status
 from sqlalchemy.exc import IntegrityError
@@ -18,11 +20,14 @@ from sqlalchemy.exc import IntegrityError
 from app.api.deps import CurrentUserId, DbSession, SettingsDep
 from app.core.errors import (
     ERR_DOC_DELETE_BUSY,
+    ERR_DOC_NO_FILE,
     ERR_DOC_NOT_FOUND,
+    ERR_DOC_PARAM,
     ERR_INTERNAL,
     ApiError,
 )
 from app.core.logging import get_logger, safe_extra
+from app.core.security import normalize_filename
 from app.db import redis as redis_db
 from app.models.document import Document
 from app.schemas.common import Page
@@ -38,6 +43,12 @@ logger = get_logger(__name__)
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
+# 任务投递重试：Redis 抖动时避免任务静默丢失（prd/04 §5.2 失败告警）
+_ENQUEUE_ATTEMPTS = 3
+
+# 仅 ready / failed 状态可删除（prd/05-api-spec.md API-5 约束）
+_DELETABLE_STATUSES = ("ready", "failed")
+
 
 @router.post(
     "/upload",
@@ -45,7 +56,7 @@ router = APIRouter(prefix="/documents", tags=["documents"])
     response_model=UploadDocumentResponse,
 )
 async def upload_document(
-    file: UploadFile = File(...),
+    file: UploadFile | None = File(None),
     # session_id：传入则将该文档加入会话默认检索范围；sessions 模块 M4 落地后生效
     session_id: str | None = Form(None),
     user_id: CurrentUserId = None,  # type: ignore[assignment]
@@ -58,8 +69,24 @@ async def upload_document(
     请求：multipart/form-data，字段 file（可选 session_id）
     命中去重返回 200 { deduplicated: true }；新文档返回 202。
     """
+    if file is None:
+        raise ApiError(ERR_DOC_NO_FILE, "缺少必填字段 file", status=400)
+
+    raw_filename = (file.filename or "").strip()
+    if not raw_filename:
+        raise ApiError(ERR_DOC_PARAM, "文件名不能为空", status=400)
+    # 文件名安全规范化（去路径穿越与控制字符，NFR-3.3），并限制 ≤ 255 字符
+    filename = normalize_filename(raw_filename)
+    if len(filename) > 255:
+        raise ApiError(ERR_DOC_PARAM, "文件名长度超过 255 字符", status=400)
+    if session_id is not None:
+        try:
+            uuid.UUID(session_id)
+        except ValueError:
+            raise ApiError(ERR_DOC_PARAM, "session_id 必须是合法 UUID", status=400) from None
+
     data = await file.read()
-    source_format = document_service.validate_upload(file.filename or "", data, settings)
+    source_format = document_service.validate_upload(filename, data, settings)
     content_hash = document_service.compute_content_hash(data)
 
     # 去重（AC-1.5）：同用户同内容直接返回已有文档
@@ -79,7 +106,7 @@ async def upload_document(
         document = await document_service.create_document(
             db,
             user_id=user_id,
-            filename=file.filename or document_id,
+            filename=filename,
             content_hash=content_hash,
             source_format=source_format,
             file_size_bytes=len(data),
@@ -89,8 +116,10 @@ async def upload_document(
         )
         await db.commit()
     except IntegrityError:
-        # 并发上传同一文件（B-8）：部分唯一索引兜底，回查已有记录并按去重响应
+        # 并发上传同一文件（B-8）：部分唯一索引兜底，回查已有记录并按去重响应；
+        # 竞争失败方的本地文件成为孤儿，需删除
         await db.rollback()
+        _remove_file_quietly(storage_path)
         raced = await document_service.find_active_by_hash(db, user_id, content_hash)
         if raced is None:
             raise ApiError(ERR_INTERNAL, "文档创建冲突且无法定位已有记录", status=500) from None
@@ -113,8 +142,11 @@ async def get_document_status(
 ) -> DocumentStatusResponse:
     """查询处理状态（六态）。
 
-    Redis doc:task 快路径（高频轮询），miss 或越权回退 PostgreSQL 权威数据。
+    Redis doc:task 快路径（高频轮询，中间状态由 worker 每阶段广播），
+    miss 或越权回退 PostgreSQL 权威数据。
     """
+    _ensure_document_id(document_id)
+
     try:
         cached = await redis_db.get_doc_task(document_id)
     except Exception as exc:  # noqa: BLE001  # Redis 不可用不阻断查询
@@ -128,20 +160,12 @@ async def get_document_status(
     if cached is not None:
         if cached.get("user_id") != user_id:
             raise ApiError(ERR_DOC_NOT_FOUND, "文档不存在或不属于当前用户", status=404)
-        return DocumentStatusResponse(
-            document_id=str(cached.get("document_id", document_id)),
-            filename=str(cached.get("filename", "")),
-            status=str(cached.get("status", "uploaded")),
-            chunk_count=cached.get("chunk_count"),
-            page_count=cached.get("page_count"),
-            updated_at=cached.get("updated_at"),
-            error=cached.get("error"),
-        )
+        return _status_response_from_dict(cached)
 
     document = await document_service.get_document(db, document_id, user_id)
     if document is None:
         raise ApiError(ERR_DOC_NOT_FOUND, "文档不存在或不属于当前用户", status=404)
-    return _status_response(document)
+    return _status_response_from_dict(document_service.task_payload(document))
 
 
 @router.get("", response_model=Page[DocumentBrief])
@@ -187,23 +211,18 @@ async def delete_document(
 
     仅 ready / failed 状态可删除（处理中需先取消任务，4091002）。
     """
+    _ensure_document_id(document_id)
+
     document = await document_service.get_document(db, document_id, user_id)
     if document is None:
         raise ApiError(ERR_DOC_NOT_FOUND, "文档不存在或不属于当前用户", status=404)
-    if document.status not in ("ready", "failed"):
+    if document.status not in _DELETABLE_STATUSES:
         raise ApiError(ERR_DOC_DELETE_BUSY, "文档正在处理中，无法删除", status=409)
 
     await document_service.soft_delete_document(db, document)
     await db.commit()
+    await _finalize_delete(document_id)
 
-    try:
-        await redis_db.enqueue_purge(document_id)
-    except Exception as exc:  # noqa: BLE001  # Redis 不可用不阻断软删
-        logger.warning(
-            "清理任务投递失败（Redis 不可用）：%s",
-            exc,
-            extra=safe_extra(document_id=document_id),
-        )
     return DeleteDocumentResponse(
         document_id=document_id,
         status="deleting",
@@ -212,6 +231,22 @@ async def delete_document(
 
 
 # ---------------- 内部实现 ----------------
+
+
+def _ensure_document_id(document_id: str) -> str:
+    """document_id 必须是合法 UUID；非法格式按不存在处理（4041001），避免 PG 报 500。"""
+    try:
+        return str(uuid.UUID(document_id))
+    except ValueError:
+        raise ApiError(ERR_DOC_NOT_FOUND, "文档不存在或不属于当前用户", status=404) from None
+
+
+def _remove_file_quietly(storage_path: str) -> None:
+    """删除孤儿文件；失败仅记日志。"""
+    try:
+        Path(storage_path).unlink(missing_ok=True)
+    except OSError as exc:
+        logger.warning("孤儿文件删除失败：%s", exc, extra=safe_extra(storage_path=storage_path))
 
 
 def _upload_response(document: Document, *, deduplicated: bool) -> UploadDocumentResponse:
@@ -224,31 +259,63 @@ def _upload_response(document: Document, *, deduplicated: bool) -> UploadDocumen
     )
 
 
-def _status_response(document: Document) -> DocumentStatusResponse:
-    error = None
-    if document.error_code:
-        error = {"code": document.error_code, "message": document.error_message or ""}
+def _status_response_from_dict(payload: dict) -> DocumentStatusResponse:
+    """API-3 响应统一构造（Redis 快路径与 PG 回退共用，user_id 不透出）。"""
     return DocumentStatusResponse(
-        document_id=str(document.id),
-        filename=document.filename,
-        status=document.status,
-        chunk_count=document.chunk_count,
-        page_count=document.page_count,
-        updated_at=document.updated_at,
-        error=error,
+        document_id=str(payload.get("document_id", "")),
+        filename=str(payload.get("filename", "")),
+        status=str(payload.get("status", "uploaded")),
+        chunk_count=payload.get("chunk_count"),
+        page_count=payload.get("page_count"),
+        updated_at=payload.get("updated_at"),
+        error=payload.get("error"),
     )
 
 
 async def _publish_task(document: Document, ttl_seconds: int) -> None:
-    """上传后立即写入任务状态，使 API-3 立即可查（Redis 不可用不阻断）。"""
-    try:
-        await redis_db.set_doc_task(
-            str(document.id), document_service.task_payload(document), ttl_seconds
-        )
-        await redis_db.enqueue_ingest(str(document.id))
-    except Exception as exc:  # noqa: BLE001
-        logger.warning(
-            "任务状态写入 / 投递失败（Redis 不可用）：%s",
-            exc,
-            extra=safe_extra(document_id=str(document.id)),
-        )
+    """上传后立即写入任务状态并投递入库任务（Redis 不可用时重试，最终失败告警）。"""
+    document_id = str(document.id)
+    for attempt in range(1, _ENQUEUE_ATTEMPTS + 1):
+        try:
+            await redis_db.set_doc_task(
+                document_id, document_service.task_payload(document), ttl_seconds
+            )
+            await redis_db.enqueue_ingest(document_id)
+            return
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "任务状态写入 / 投递失败（第 %d/%d 次）：%s",
+                attempt,
+                _ENQUEUE_ATTEMPTS,
+                exc,
+                extra=safe_extra(document_id=document_id),
+            )
+            if attempt < _ENQUEUE_ATTEMPTS:
+                await asyncio.sleep(0.5 * attempt)
+    logger.error(
+        "入库任务投递失败，文档停留在 uploaded，需补偿投递",
+        extra=safe_extra(document_id=document_id),
+    )
+
+
+async def _finalize_delete(document_id: str) -> None:
+    """软删后：失效 API-3 缓存（软删立即生效）+ 重试投递 purge 任务。"""
+    for attempt in range(1, _ENQUEUE_ATTEMPTS + 1):
+        try:
+            await redis_db.delete_doc_task(document_id)
+            await redis_db.enqueue_purge(document_id)
+            return
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "缓存失效 / 清理任务投递失败（第 %d/%d 次）：%s",
+                attempt,
+                _ENQUEUE_ATTEMPTS,
+                exc,
+                extra=safe_extra(document_id=document_id),
+            )
+            if attempt < _ENQUEUE_ATTEMPTS:
+                await asyncio.sleep(0.5 * attempt)
+    logger.error(
+        "purge 任务投递失败，文档向量未清理，需对账补偿",
+        extra=safe_extra(document_id=document_id),
+    )

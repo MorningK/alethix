@@ -1,8 +1,10 @@
 """入库服务测试（M1）。
 
 以打桩方式覆盖 ingestion_service 编排逻辑：
-    - 状态机推进顺序 parsing → chunking → embedding → ready
-    - 先 PG 后 Qdrant：chunk_id 同时作为 Point ID，payload 含越权过滤字段
+    - 状态机推进顺序 parsing → chunking → embedding → ready，且每阶段广播 Redis
+    - 先 PG 后 Qdrant：chunk_id 同时作为 Point ID，payload 含越权过滤字段与标题
+    - 文档标题进入 embedding 文本（结构头）
+    - 重入幂等：重新入库前清理残留 chunks 与 Qdrant Point
     - 解析失败（4xx）与向量化失败（5xx）均置 failed 并回滚 Qdrant 残留 Point
     - purge：删 Qdrant Point → 删本地文件 → 硬删文档行
 """
@@ -34,6 +36,7 @@ class FakeSession:
         self.document = document
         self.status_log: list[str] = []
         self.commits = 0
+        self.executed: list = []
         self.added: list = []
         self.deleted: list = []
 
@@ -57,8 +60,9 @@ class FakeSession:
     async def delete(self, obj) -> None:
         self.deleted.append(obj)
 
-    async def execute(self, stmt):  # pragma: no cover - 不应被走到
-        raise AssertionError("测试不应直接执行 SQL")
+    async def execute(self, stmt):
+        self.executed.append(stmt)
+        return None
 
 
 def _document(**kwargs) -> Document:
@@ -88,43 +92,6 @@ def _parse_result() -> ParseResult:
 
 async def _fake_embed(texts, settings):
     return [[0.1, 0.2, 0.3] for _ in texts]
-
-
-@pytest.fixture
-def stub_env(monkeypatch):
-    """打桩 PG 会话 / 解析 / Qdrant / Redis，返回记录容器。"""
-    document = _document()
-    session = FakeSession(document)
-    upserts: list = []
-    deletes: list[tuple[str, str]] = []
-    task_writes: list[dict] = []
-
-    @asynccontextmanager
-    async def fake_scope():
-        yield session
-
-    monkeypatch.setattr(postgres, "session_scope", fake_scope)
-    monkeypatch.setattr(ingestion_service.postgres, "session_scope", fake_scope)
-    monkeypatch.setattr(ingestion_service, "get_any_document", _async_return(document))
-    monkeypatch.setattr(
-        ingestion_service, "get_document_including_deleted", _async_return(document)
-    )
-    monkeypatch.setattr(ingestion_service, "parse_document", _sync_return(_parse_result()))
-    monkeypatch.setattr(qdrant_service, "upsert_points", _record_upsert(upserts))
-    monkeypatch.setattr(qdrant_service, "delete_by_document_id", _record_delete(deletes))
-
-    async def fake_set_task(document_id, payload, ttl):
-        task_writes.append(payload)
-
-    monkeypatch.setattr(ingestion_service.redis_db, "set_doc_task", fake_set_task)
-
-    return SimpleNamespace(
-        document=document,
-        session=session,
-        upserts=upserts,
-        deletes=deletes,
-        task_writes=task_writes,
-    )
 
 
 class SimpleNamespace:  # 轻量记录容器
@@ -161,16 +128,66 @@ def _record_delete(sink: list):
     return _fn
 
 
+@pytest.fixture
+def stub_env(monkeypatch):
+    """打桩 PG 会话 / 解析 / Qdrant / Redis，返回记录容器。"""
+    document = _document()
+    session = FakeSession(document)
+    upserts: list = []
+    deletes: list[tuple[str, str]] = []
+    task_writes: list[dict] = []
+    embed_texts_seen: list[str] = []
+
+    @asynccontextmanager
+    async def fake_scope():
+        yield session
+
+    monkeypatch.setattr(postgres, "session_scope", fake_scope)
+    monkeypatch.setattr(ingestion_service.postgres, "session_scope", fake_scope)
+    monkeypatch.setattr(ingestion_service, "get_any_document", _async_return(document))
+    monkeypatch.setattr(
+        ingestion_service, "get_document_including_deleted", _async_return(document)
+    )
+    monkeypatch.setattr(ingestion_service, "parse_document", _sync_return(_parse_result()))
+    monkeypatch.setattr(qdrant_service, "upsert_points", _record_upsert(upserts))
+    monkeypatch.setattr(qdrant_service, "delete_by_document_id", _record_delete(deletes))
+
+    async def fake_set_task(document_id, payload, ttl):
+        task_writes.append(payload)
+
+    monkeypatch.setattr(ingestion_service.redis_db, "set_doc_task", fake_set_task)
+
+    async def recording_embed(texts, settings):
+        embed_texts_seen.extend(texts)
+        return [[0.1, 0.2, 0.3] for _ in texts]
+
+    return SimpleNamespace(
+        document=document,
+        session=session,
+        upserts=upserts,
+        deletes=deletes,
+        task_writes=task_writes,
+        embed_texts_seen=embed_texts_seen,
+        embed_fn=recording_embed,
+    )
+
+
 # ---------------- 正常入库 ----------------
 
 
 async def test_ingest_happy_path(stub_env):
     settings = Settings(**NO_ENV_FILE)
 
-    await ingestion_service.ingest_document(DOC_ID, settings=settings, embed_fn=_fake_embed)
+    await ingestion_service.ingest_document(DOC_ID, settings=settings, embed_fn=stub_env.embed_fn)
 
-    # 状态机顺序：parsing → chunking → embedding → ready（初始 uploaded 不提交）
-    assert stub_env.session.status_log == ["parsing", "chunking", "embedding", "ready"]
+    # 状态机顺序（含重入清理时的一次当前态提交）
+    assert stub_env.session.status_log == [
+        "uploaded",
+        "parsing",
+        "chunking",
+        "embedding",
+        "ready",
+    ]
     assert stub_env.document.status == "ready"
     assert stub_env.document.chunk_count == 2
     assert stub_env.document.page_count == 2
@@ -185,22 +202,54 @@ async def test_ingest_happy_path(stub_env):
         assert point_id in chunk_ids
         assert payload["user_id"] == USER_ID
         assert payload["doc_id"] == DOC_ID
+        assert payload["title"] == "测试报告"  # 结构信息落入 payload
         assert payload["content"]  # payload 存纯正文
         assert "chunk_index" in payload
         assert vector == [0.1, 0.2, 0.3]
 
-    # 终态写入 Redis 任务状态
-    assert stub_env.task_writes and stub_env.task_writes[-1]["status"] == "ready"
+    # 文档标题进入 embedding 文本（结构头）
+    assert any("【文档标题】测试报告" in text for text in stub_env.embed_texts_seen)
+
+    # 每个阶段都广播任务状态（API-3 快路径可见中间态，AC-1.2）
+    assert [w["status"] for w in stub_env.task_writes] == [
+        "parsing",
+        "chunking",
+        "embedding",
+        "ready",
+    ]
 
 
 async def test_ingest_skips_ready_document(stub_env):
     stub_env.document.status = "ready"
     settings = Settings(**NO_ENV_FILE)
 
-    await ingestion_service.ingest_document(DOC_ID, settings=settings, embed_fn=_fake_embed)
+    await ingestion_service.ingest_document(DOC_ID, settings=settings, embed_fn=stub_env.embed_fn)
 
     assert stub_env.session.status_log == []
     assert stub_env.upserts == []
+
+
+async def test_reingest_cleans_previous_data(stub_env):
+    """失败重试后重新入库：先清理残留 chunks 与 Qdrant Point，再重新写入。"""
+    settings = Settings(**NO_ENV_FILE)
+
+    await ingestion_service.ingest_document(DOC_ID, settings=settings, embed_fn=stub_env.embed_fn)
+    # 模拟重试：文档回到 uploaded，清空记录
+    stub_env.document.status = "uploaded"
+    stub_env.session.status_log.clear()
+    stub_env.upserts.clear()
+    stub_env.deletes.clear()
+    stub_env.session.executed.clear()
+
+    await ingestion_service.ingest_document(DOC_ID, settings=settings, embed_fn=stub_env.embed_fn)
+
+    # 重入清理：DELETE chunks + 删除 Qdrant 残留 Point
+    assert len(stub_env.session.executed) >= 1
+    assert stub_env.deletes == [(USER_ID, DOC_ID)]
+    # 重新写入后仍为 ready，chunk 数一致
+    assert stub_env.document.status == "ready"
+    assert stub_env.document.chunk_count == 2
+    assert len(stub_env.upserts) == 2
 
 
 # ---------------- 失败路径 ----------------
@@ -215,13 +264,15 @@ async def test_ingest_parse_failure_marks_failed_and_rolls_back(stub_env, monkey
     monkeypatch.setattr(ingestion_service, "parse_document", boom)
 
     with pytest.raises(ApiError) as exc:
-        await ingestion_service.ingest_document(DOC_ID, settings=settings, embed_fn=_fake_embed)
+        await ingestion_service.ingest_document(
+            DOC_ID, settings=settings, embed_fn=stub_env.embed_fn
+        )
 
     assert exc.value.code == ERR_DOC_UNREADABLE
     assert stub_env.document.status == "failed"
     assert stub_env.document.error_code == ERR_DOC_UNREADABLE
-    # 回滚 Qdrant 残留 Point（幂等）
-    assert stub_env.deletes == [(USER_ID, DOC_ID)]
+    # 回滚 Qdrant 残留 Point（幂等）：重入清理一次 + 失败回滚一次
+    assert stub_env.deletes == [(USER_ID, DOC_ID), (USER_ID, DOC_ID)]
     assert stub_env.task_writes[-1]["status"] == "failed"
 
 
@@ -237,7 +288,7 @@ async def test_ingest_embed_failure_wrapped_as_internal(stub_env):
     assert exc.value.code == ERR_INTERNAL
     assert exc.value.status == 500
     assert stub_env.document.status == "failed"
-    assert stub_env.deletes == [(USER_ID, DOC_ID)]
+    assert stub_env.deletes == [(USER_ID, DOC_ID), (USER_ID, DOC_ID)]
 
 
 # ---------------- 物理清理 ----------------

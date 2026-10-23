@@ -137,6 +137,11 @@ async def get_doc_task(document_id: str) -> dict[str, Any] | None:
     return data if isinstance(data, dict) else None
 
 
+async def delete_doc_task(document_id: str) -> None:
+    """删除任务状态快照（软删后立即使 API-3 回退 PostgreSQL，避免查到已删文档）。"""
+    await get_redis().delete(key_doc_task(document_id))
+
+
 async def acquire_doc_lock(document_id: str, ttl_seconds: int = 600) -> bool:
     """获取文档处理幂等锁（prd/04 §7.1 doc:lock:{id}），已被持有返回 False。"""
     return bool(await get_redis().set(key_doc_lock(document_id), "1", nx=True, ex=ttl_seconds))

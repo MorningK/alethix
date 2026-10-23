@@ -9,7 +9,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
-# 文档处理状态，见 README 状态枚举速查
+# 文档处理状态枚举，见 prd/05-api-spec.md §2.1 与 prd/04-data-model.md §3.2 CHECK 约束
 DOCUMENT_STATUSES = ("uploaded", "parsing", "chunking", "embedding", "ready", "failed")
 
 

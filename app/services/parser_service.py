@@ -20,9 +20,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from app.core.errors import ERR_DOC_TYPE_OR_SIZE, ERR_DOC_UNREADABLE, ApiError
+from app.core.security import validate_extension, validate_magic_number
 
 # 文本格式解码统一按 UTF-8（容忍 BOM）；解码失败按不可读文档处理
 _TEXT_ENCODING = "utf-8-sig"
+
+# detect_format 未显式传白名单时的 MVP 默认值（与 Settings.doc_allowed_extensions 一致）
+_DEFAULT_ALLOWED_EXTENSIONS = ("pdf", "md", "txt")
 
 # Markdown 标题行：`## 标题`
 _MD_HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
@@ -56,26 +60,18 @@ def detect_format(
 ) -> str:
     """识别真实格式：扩展名白名单 + 魔数校验，不信任扩展名（API-2 约束）。
 
+    白名单与魔数校验复用 app.core.security（NFR-3.3）；md / txt 无魔数，
+    额外要求可按 UTF-8 解码，防止伪造扩展名。
+
     返回归一化格式：pdf / md / txt。
     """
-    allowed = {ext.lower() for ext in allowed_extensions} if allowed_extensions else None
-    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
-    if not ext:
-        raise ApiError(ERR_DOC_TYPE_OR_SIZE, "文件缺少扩展名，无法识别格式", status=400)
-    if allowed is not None and ext not in allowed:
-        raise ApiError(ERR_DOC_TYPE_OR_SIZE, f"不支持的文件类型：{ext}", status=400)
-
-    if ext == "pdf":
-        if not data.startswith(b"%PDF-"):
-            raise ApiError(ERR_DOC_TYPE_OR_SIZE, "文件内容与声明格式（PDF）不匹配", status=400)
-        return "pdf"
-    if ext in ("md", "markdown"):
+    allowed = tuple(allowed_extensions) if allowed_extensions else _DEFAULT_ALLOWED_EXTENSIONS
+    ext = validate_extension(filename, list(allowed))
+    if not validate_magic_number(data[:16], ext):
+        raise ApiError(ERR_DOC_TYPE_OR_SIZE, f"文件内容与声明格式（{ext}）不匹配", status=400)
+    if ext in ("md", "txt"):
         _ensure_text_decodable(data)
-        return "md"
-    if ext == "txt":
-        _ensure_text_decodable(data)
-        return "txt"
-    raise ApiError(ERR_DOC_TYPE_OR_SIZE, f"不支持的文件类型：{ext}", status=400)
+    return ext
 
 
 def parse_document(path: str, source_format: str) -> ParseResult:

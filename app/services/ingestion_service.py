@@ -3,16 +3,23 @@
 编排「解析 → 清洗 → 切片 → 向量化 → 写入 Qdrant」全流程。
 写入顺序见 prd/04-data-model.md §5.1：先 PG 落 chunks，再写 Qdrant。
 
+可靠性：
+    - 每个阶段提交后立即写入 Redis doc:task，API-3 快路径可见中间状态（AC-1.2）
+    - 重入幂等：清理上次残留的 chunks 与 Qdrant Point 后重新入库（prd/04 §5.3）
+    - 任一环节失败：置 failed 并清理 Qdrant 残留 Point（幂等）
+
 实现阶段：M1。
 """
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from collections.abc import Awaitable, Callable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
+from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings, get_settings
@@ -22,7 +29,7 @@ from app.db import postgres
 from app.db import redis as redis_db
 from app.models.document import Chunk, Document
 from app.services import qdrant_service
-from app.services.chunk_service import ChunkDraft, build_embedding_text, split_blocks
+from app.services.chunk_service import build_embedding_text, split_blocks
 from app.services.document_service import (
     get_any_document,
     get_document_including_deleted,
@@ -79,14 +86,7 @@ async def purge_document(document_id: str, *, settings: Settings | None = None) 
         user_id = document.user_id
         storage_path = document.storage_path
 
-        try:
-            qdrant_service.delete_by_document_id(settings, user_id, document_id)
-        except Exception as exc:  # noqa: BLE001
-            logger.error(
-                "Qdrant Point 清理失败，交由对账补偿：%s",
-                exc,
-                extra=safe_extra(document_id=document_id),
-            )
+        await _delete_points_quietly(document_id, user_id, settings)
 
         if storage_path:
             try:
@@ -115,13 +115,16 @@ async def _ingest(document_id: str, *, settings: Settings, embed_fn: EmbedFn | N
             return
 
         user_id = document.user_id
+        # 重入幂等：清除上次失败可能残留的 chunks 与 Qdrant Point
+        await _reset_document_data(session, document, settings)
 
         # ---- parsing ----
-        await _advance(session, document, "parsing")
+        await _advance(session, document, "parsing", settings)
         parsed = parse_document(document.storage_path or "", document.source_format or "")
+        title = document.title or parsed.title
 
         # ---- chunking ----
-        await _advance(session, document, "chunking")
+        await _advance(session, document, "chunking", settings)
         drafts = split_blocks(
             parsed.blocks,
             settings.chunk_size_tokens,
@@ -144,11 +147,11 @@ async def _ingest(document_id: str, *, settings: Settings, embed_fn: EmbedFn | N
             for index, draft in enumerate(drafts)
         ]
         session.add_all(chunks)
-        await _advance(session, document, "embedding")
+        await _advance(session, document, "embedding", settings)
 
-        # ---- embedding ----
+        # ---- embedding（结构头只增强语义，content 仍存纯正文）----
         texts = [
-            build_embedding_text(document.title, draft.section, draft.page, draft.content)
+            build_embedding_text(title, draft.section, draft.page, draft.content)
             for draft in drafts
         ]
         vectors = await (embed_fn or embed_texts)(texts, settings)
@@ -163,6 +166,7 @@ async def _ingest(document_id: str, *, settings: Settings, embed_fn: EmbedFn | N
                 {
                     "user_id": user_id,
                     "doc_id": document_id,
+                    "title": title,
                     "chunk_index": chunk.chunk_index,
                     "page": chunk.page,
                     "section": chunk.section,
@@ -171,29 +175,63 @@ async def _ingest(document_id: str, *, settings: Settings, embed_fn: EmbedFn | N
             )
             for chunk, vector in zip(chunks, vectors)
         ]
-        qdrant_service.upsert_points(settings, points)
+        await asyncio.to_thread(qdrant_service.upsert_points, settings, points)
 
         # ---- ready ----
         document.chunk_count = len(chunks)
         document.page_count = parsed.page_count
-        if parsed.title and not document.title:
-            document.title = parsed.title
+        document.title = title
         document.ready_at = datetime.now(UTC)
-        await _advance(session, document, "ready")
+        await _advance(session, document, "ready", settings)
 
     logger.info(
         "文档入库完成",
         extra=safe_extra(document_id=document_id, chunk_count=len(chunks)),
     )
-    await _publish_status(document_id, settings=settings)
 
 
-async def _advance(session: AsyncSession, document: Document, status: str) -> None:
-    """推进状态机并立即提交（崩溃后可从当前状态恢复，见 prd/04 §5.1）。"""
+async def _reset_document_data(
+    session: AsyncSession, document: Document, settings: Settings
+) -> None:
+    """清理文档残留数据，使 ingest 可安全重入（prd/04 §5.3 向量重建语义）。"""
+    await session.execute(delete(Chunk).where(Chunk.document_id == document.id))
+    await session.commit()
+    await _delete_points_quietly(str(document.id), document.user_id, settings)
+
+
+async def _delete_points_quietly(document_id: str, user_id: str, settings: Settings) -> None:
+    """删除 Qdrant Point；失败仅记日志（PG 为权威源，孤儿由 M5 对账兜底）。"""
+    try:
+        await asyncio.to_thread(
+            qdrant_service.delete_by_document_id, settings, user_id, document_id
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Qdrant Point 清理失败：%s", exc, extra=safe_extra(document_id=document_id))
+
+
+async def _advance(
+    session: AsyncSession, document: Document, status: str, settings: Settings
+) -> None:
+    """推进状态机并立即提交 + 广播（prd/04 §5.1：崩溃后可从当前状态恢复）。"""
     document.status = status
     document.error_code = None
     document.error_message = None
     await session.commit()
+    await _write_task_status(document, settings)
+
+
+async def _write_task_status(document: Document, settings: Settings) -> None:
+    """把文档最新状态写入 Redis doc:task（API-3 快路径）；Redis 不可用不阻断。"""
+    try:
+        await redis_db.set_doc_task(
+            str(document.id), task_payload(document), settings.ingest_task_ttl_seconds
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "任务状态写入 Redis 失败（PG 仍为权威源）：%s",
+            exc,
+            extra=safe_extra(document_id=str(document.id)),
+        )
 
 
 async def _mark_failed(document_id: str, exc: ApiError, *, settings: Settings) -> None:
@@ -206,39 +244,15 @@ async def _mark_failed(document_id: str, exc: ApiError, *, settings: Settings) -
             document.status = "failed"
             document.error_code = exc.code
             document.error_message = exc.message
-            try:
-                qdrant_service.delete_by_document_id(settings, document.user_id, document_id)
-            except Exception as cleanup_exc:  # noqa: BLE001
-                logger.error(
-                    "Qdrant 残留 Point 清理失败：%s",
-                    cleanup_exc,
-                    extra=safe_extra(document_id=document_id),
-                )
             await session.commit()
+            await _delete_points_quietly(document_id, document.user_id, settings)
+            await _write_task_status(document, settings)
     except Exception as mark_exc:  # noqa: BLE001
         logger.error("标记文档失败时出错：%s", mark_exc, extra=safe_extra(document_id=document_id))
     logger.warning(
         "文档入库失败",
         extra=safe_extra(document_id=document_id, error_code=exc.code),
     )
-    await _publish_status(document_id, settings=settings)
 
 
-async def _publish_status(document_id: str, *, settings: Settings) -> None:
-    """把文档最新状态写入 Redis doc:task（API-3 快路径）。Redis 不可用不阻断流程。"""
-    try:
-        async with postgres.session_scope() as session:
-            document = await get_any_document(session, document_id)
-            if document is None:
-                return
-            payload = task_payload(document)
-        await redis_db.set_doc_task(document_id, payload, settings.ingest_task_ttl_seconds)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning(
-            "任务状态写入 Redis 失败（PG 仍为权威源）：%s",
-            exc,
-            extra=safe_extra(document_id=document_id),
-        )
-
-
-__all__ = ["ChunkDraft", "ingest_document", "purge_document"]
+__all__ = ["ingest_document", "purge_document"]

@@ -189,6 +189,10 @@ def task_payload(document: Document) -> dict:
     """构造 doc:task:{id} 与 API-3 共用的任务状态快照（prd/05-api-spec.md §2）。
 
     user_id 仅用于缓存路径的越权校验，不返回给客户端（Pydantic 默认忽略多余字段）。
+
+    注意：updated_at 为 server_default + onupdate=now()，UPDATE 提交后 SQLAlchemy 会将该列
+    标记为 expired，异步上下文中读取会触发懒加载并抛 MissingGreenlet。快照时间取当前时刻
+    （写入时机即状态变更时机，语义等价）。
     """
     error = None
     if document.error_code:
@@ -200,7 +204,7 @@ def task_payload(document: Document) -> dict:
         "status": document.status,
         "chunk_count": document.chunk_count,
         "page_count": document.page_count,
-        "updated_at": (document.updated_at or datetime.now(UTC)).isoformat(),
+        "updated_at": datetime.now(UTC).isoformat(),
         "error": error,
     }
 

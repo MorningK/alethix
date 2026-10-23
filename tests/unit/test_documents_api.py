@@ -72,7 +72,13 @@ def client(monkeypatch):
 
     app.dependency_overrides[get_session] = _override_session
 
-    calls: dict = {"enqueue_ingest": [], "enqueue_purge": [], "set_task": []}
+    calls: dict = {
+        "enqueue_ingest": [],
+        "enqueue_purge": [],
+        "set_task": [],
+        "delete_task": [],
+        "created": [],
+    }
 
     async def _enqueue_ingest(document_id):
         calls["enqueue_ingest"].append(document_id)
@@ -86,13 +92,20 @@ def client(monkeypatch):
     async def _get_doc_task(document_id):
         return None
 
+    async def _delete_doc_task(document_id):
+        calls["delete_task"].append(document_id)
+
     monkeypatch.setattr(redis_db, "get_doc_task", _get_doc_task)
     monkeypatch.setattr(redis_db, "set_doc_task", _set_doc_task)
+    monkeypatch.setattr(redis_db, "delete_doc_task", _delete_doc_task)
     monkeypatch.setattr(redis_db, "enqueue_ingest", _enqueue_ingest)
     monkeypatch.setattr(redis_db, "enqueue_purge", _enqueue_purge)
 
-    # 服务层默认桩（各测试按需覆盖）
+    # 服务层默认桩（各测试按需覆盖）；save_upload_file 打桩避免测试写真实文件
     monkeypatch.setattr(document_service, "validate_upload", lambda *a, **k: "md")
+    monkeypatch.setattr(
+        document_service, "save_upload_file", lambda *a, **k: "/tmp/fake-storage.md"
+    )
     monkeypatch.setattr(document_service, "find_active_by_hash", _async_none)
     monkeypatch.setattr(document_service, "count_user_documents", _async_zero)
     monkeypatch.setattr(document_service, "create_document", _create_document)
@@ -111,6 +124,9 @@ def client(monkeypatch):
 
 # ---------------- 桩函数 ----------------
 
+# create_document 调用参数记录（测试读取后自行清理）
+_created_kwargs: list[dict] = []
+
 
 async def _async_none(*args, **kwargs):
     return None
@@ -125,6 +141,7 @@ async def _async_noop(*args, **kwargs):
 
 
 async def _create_document(session, **kwargs):
+    _created_kwargs.append(kwargs)
     return _document(
         id=kwargs.get("document_id") or DOC_ID,
         filename=kwargs["filename"],
@@ -358,6 +375,84 @@ def test_delete_missing_document_returns_404(client):
     resp = client.delete(f"/api/v1/documents/{DOC_ID}", headers=HEADERS)
     assert resp.status_code == 404
     assert resp.json()["error"]["code"] == "4041001"
+
+
+# ---------------- 复查修复补充用例 ----------------
+
+
+def test_upload_missing_file_returns_4001002(client):
+    """缺少 file 字段 → 4001002（prd/05-api-spec.md §5），而非 FastAPI 默认 422。"""
+    resp = client.post("/api/v1/documents/upload", headers=HEADERS)
+
+    assert resp.status_code == 400
+    assert resp.json()["error"]["code"] == "4001002"
+
+
+def test_upload_normalizes_filename(client):
+    """路径穿越文件名被规范化为 basename（NFR-3.3）。"""
+    _created_kwargs.clear()
+    resp = client.post(
+        "/api/v1/documents/upload",
+        files={"file": ("../../evil.md", b"# hi", "text/markdown")},
+        headers=HEADERS,
+    )
+
+    assert resp.status_code == 202
+    assert _created_kwargs[-1]["filename"] == "evil.md"
+
+
+def test_upload_rejects_long_filename(client):
+    long_name = "a" * 253 + ".md"  # 257 > 255
+    resp = client.post(
+        "/api/v1/documents/upload",
+        files={"file": (long_name, b"# hi", "text/markdown")},
+        headers=HEADERS,
+    )
+
+    assert resp.status_code == 400
+    assert resp.json()["error"]["code"] == "4001001"
+
+
+def test_upload_rejects_invalid_session_id(client):
+    resp = client.post(
+        "/api/v1/documents/upload",
+        files={"file": ("report.md", b"# hi", "text/markdown")},
+        data={"session_id": "not-a-uuid"},
+        headers=HEADERS,
+    )
+
+    assert resp.status_code == 400
+    assert resp.json()["error"]["code"] == "4001001"
+
+
+def test_status_invalid_uuid_returns_404(client):
+    """非法 document_id 按不存在处理（4041001），避免 PG UUID  casts 报 500。"""
+    resp = client.get("/api/v1/documents/not-a-uuid/status", headers=HEADERS)
+
+    assert resp.status_code == 404
+    assert resp.json()["error"]["code"] == "4041001"
+
+
+def test_delete_invalid_uuid_returns_404(client):
+    resp = client.delete("/api/v1/documents/not-a-uuid", headers=HEADERS)
+
+    assert resp.status_code == 404
+    assert resp.json()["error"]["code"] == "4041001"
+
+
+def test_delete_invalidates_task_cache(client, monkeypatch):
+    """软删后失效 doc:task 缓存，API-3 立即回退 PG（软删立即生效）。"""
+
+    async def _get(session, document_id, user_id):
+        return _document(status="ready")
+
+    monkeypatch_attr(client, "get_document", _get)
+
+    resp = client.delete(f"/api/v1/documents/{DOC_ID}", headers=HEADERS)
+
+    assert resp.status_code == 202
+    assert client.calls["delete_task"] == [DOC_ID]
+    assert client.calls["enqueue_purge"] == [DOC_ID]
 
 
 # ---------------- 工具 ----------------

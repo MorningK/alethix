@@ -31,6 +31,7 @@ logger = get_logger(__name__)
 
 _QUEUES = (redis_db.key_ingest_queue(), redis_db.key_purge_queue())
 _LOCK_TTL_SECONDS = 600
+_MAX_BACKOFF_SECONDS = 30
 
 
 class IngestWorker:
@@ -95,22 +96,7 @@ class IngestWorker:
                 extra=safe_extra(document_id=document_id, error_code=exc.code),
             )
             return
-        retry = await redis_db.next_retry_count(document_id)
-        if retry <= self._settings.ingest_max_retries:
-            backoff = min(2**retry, 30)
-            logger.info(
-                "文档入库将重试（第 %d 次，%ds 后）",
-                retry,
-                backoff,
-                extra=safe_extra(document_id=document_id),
-            )
-            await asyncio.sleep(backoff)
-            await redis_db.enqueue_ingest(document_id)
-        else:
-            logger.error(
-                "文档入库重试次数耗尽，放弃该文档",
-                extra=safe_extra(document_id=document_id, retry=retry),
-            )
+        await self._requeue_with_backoff(document_id, redis_db.key_ingest_queue())
 
     async def _run_purge(self, document_id: str) -> None:
         if not await redis_db.acquire_doc_lock(document_id, _LOCK_TTL_SECONDS):
@@ -123,12 +109,29 @@ class IngestWorker:
             await redis_db.clear_retry_count(document_id)
         except Exception as exc:  # noqa: BLE001
             logger.error("文档物理清理失败：%s", exc, extra=safe_extra(document_id=document_id))
-            retry = await redis_db.next_retry_count(document_id)
-            if retry <= self._settings.ingest_max_retries:
-                await asyncio.sleep(min(2**retry, 30))
-                await redis_db.enqueue_purge(document_id)
+            await self._requeue_with_backoff(document_id, redis_db.key_purge_queue())
         finally:
             await redis_db.release_doc_lock(document_id)
+
+    async def _requeue_with_backoff(self, document_id: str, queue_key: str) -> bool:
+        """指数退避重投任务；超过 ingest_max_retries 记错误并放弃（需对账补偿）。"""
+        retry = await redis_db.next_retry_count(document_id)
+        if retry > self._settings.ingest_max_retries:
+            logger.error(
+                "任务重试次数耗尽，放弃该文档",
+                extra=safe_extra(document_id=document_id, retry=retry),
+            )
+            return False
+        backoff = min(2**retry, _MAX_BACKOFF_SECONDS)
+        logger.info(
+            "任务将重试（第 %d 次，%ds 后）",
+            retry,
+            backoff,
+            extra=safe_extra(document_id=document_id),
+        )
+        await asyncio.sleep(backoff)
+        await redis_db.rpush(queue_key, document_id)
+        return True
 
     async def _shutdown(self) -> None:
         try:
