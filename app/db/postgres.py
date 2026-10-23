@@ -7,6 +7,7 @@ SQLAlchemy 2.x 异步引擎 + sessionmaker，由 lifespan 统一管理生命周�
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Any
 
 from sqlalchemy.ext.asyncio import (
@@ -69,6 +70,20 @@ async def get_session() -> AsyncIterator[AsyncSession]:
 
     async with _session_factory() as session:
         yield session
+
+
+@asynccontextmanager
+async def session_scope() -> AsyncIterator[AsyncSession]:
+    """非请求场景（worker / 脚本）的会话作用域：异常时回滚，提交由调用方显式执行。"""
+    if _session_factory is None:
+        raise RuntimeError("PostgreSQL 未初始化，请先调用 init_postgres()")
+
+    async with _session_factory() as session:
+        try:
+            yield session
+        except Exception:
+            await session.rollback()
+            raise
 
 
 async def check_postgres() -> bool:

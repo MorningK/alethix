@@ -1,14 +1,18 @@
 """Alembic 迁移环境。
 
 连接串从应用配置读取，避免密钥写入 alembic.ini（NFR-3.6）。
+使用 asyncpg 异步引擎，与应用运行时（app.db.postgres）保持同一驱动；
+离线模式（--sql）退化为字面量 URL，不连接数据库。
 """
 
 from __future__ import annotations
 
+import asyncio
 from logging.config import fileConfig
 
 from alembic import context
-from sqlalchemy import engine_from_config, pool
+from sqlalchemy import pool
+from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from app.core.config import get_settings
 from app.models import Base  # 导入全部模型以生成迁移
@@ -18,11 +22,9 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# 使用应用配置中的 DSN（同步驱动，Alembic 不支持异步 DDL）
 settings = get_settings()
-config.set_main_option(
-    "sqlalchemy.url", settings.postgres_dsn.replace("+asyncpg", "+psycopg2")
-)
+# ConfigParser 会做 % 插值，DSN 中的百分号（如密码里的 %40）必须转义为 %%，否则报错
+config.set_main_option("sqlalchemy.url", settings.postgres_dsn.replace("%", "%%"))
 
 target_metadata = Base.metadata
 
@@ -38,19 +40,24 @@ def run_migrations_offline() -> None:
         context.run_migrations()
 
 
-def run_migrations_online() -> None:
-    connectable = engine_from_config(
+def do_run_migrations(connection) -> None:
+    context.configure(connection=connection, target_metadata=target_metadata)
+    with context.begin_transaction():
+        context.run_migrations()
+
+
+async def run_async_migrations() -> None:
+    connectable = async_engine_from_config(
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
     )
-    with connectable.connect() as connection:
-        context.configure(connection=connection, target_metadata=target_metadata)
-        with context.begin_transaction():
-            context.run_migrations()
+    async with connectable.connect() as connection:
+        await connection.run_sync(do_run_migrations)
+    await connectable.dispose()
 
 
 if context.is_offline_mode():
     run_migrations_offline()
 else:
-    run_migrations_online()
+    asyncio.run(run_async_migrations())

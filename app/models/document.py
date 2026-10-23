@@ -6,19 +6,28 @@ DDL 见 prd/04-data-model.md §3。本阶段仅定义 ORM 占位，
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from sqlalchemy import (
     BigInteger,
     CheckConstraint,
+    DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
     UniqueConstraint,
+    func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, TimestampMixin
+
+# 软删后依然有效的部分索引条件（prd/04-data-model.md §3.2）
+_NOT_DELETED = text("deleted_at IS NULL")
 
 
 class Document(Base, TimestampMixin):
@@ -30,7 +39,17 @@ class Document(Base, TimestampMixin):
             "status IN ('uploaded','parsing','chunking','embedding','ready','failed')",
             name="ck_documents_status",
         ),
-        UniqueConstraint("user_id", "content_hash", name="uq_documents_user_content"),
+        # 同一用户的同一内容只允许一条有效记录（软删后释放）
+        Index(
+            "uq_documents_user_content",
+            "user_id",
+            "content_hash",
+            unique=True,
+            postgresql_where=_NOT_DELETED,
+        ),
+        # 列表查询：按用户 + 时间倒序 + 状态过滤
+        Index("idx_documents_user_created", "user_id", "created_at", postgresql_where=_NOT_DELETED),
+        Index("idx_documents_status", "status", postgresql_where=_NOT_DELETED),
     )
 
     id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True)
@@ -49,6 +68,8 @@ class Document(Base, TimestampMixin):
     page_count: Mapped[int | None] = mapped_column(Integer)
     error_code: Mapped[str | None] = mapped_column(String(16))
     error_message: Mapped[str | None] = mapped_column(Text)
+    ready_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class Chunk(Base):
@@ -57,6 +78,7 @@ class Chunk(Base):
     __tablename__ = "chunks"
     __table_args__ = (
         UniqueConstraint("document_id", "chunk_index", name="uq_chunks_document_index"),
+        Index("idx_chunks_document", "document_id"),
     )
 
     id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True)
@@ -71,3 +93,7 @@ class Chunk(Base):
     token_count: Mapped[int | None] = mapped_column(Integer)
     page: Mapped[int | None] = mapped_column(Integer)
     section: Mapped[str | None] = mapped_column(String(512))
+    # 与 prd/04-data-model.md §3.3 对齐：chunks 只有 created_at，无 updated_at
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )

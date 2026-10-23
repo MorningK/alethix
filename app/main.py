@@ -12,11 +12,12 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.core.config import get_settings
-from app.core.errors import ERR_INTERNAL, ApiError, error_response
+from app.core.errors import ERR_DOC_PARAM, ERR_INTERNAL, ApiError, error_response
 from app.core.logging import get_logger, safe_extra, setup_logging, trace_id_var, user_id_var
 from app.db import postgres, redis
 from app.services import qdrant_service
@@ -117,6 +118,27 @@ def create_app() -> FastAPI:
                 code=exc.code,
                 message=exc.message,
                 details=exc.details,
+                trace_id=trace_id_var.get(),
+            ),
+        )
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_error_handler(
+        request: Request, exc: RequestValidationError
+    ) -> JSONResponse:
+        # 统一错误响应（prd/05-api-spec.md §1.5）：参数校验失败映射 4001001，
+        # 避免 FastAPI 默认 422 结构破坏前端错误码约定
+        return JSONResponse(
+            status_code=400,
+            content=error_response(
+                code=ERR_DOC_PARAM,
+                message="请求参数校验失败",
+                details={
+                    "errors": [
+                        {"loc": list(err.get("loc", [])), "msg": err.get("msg", "")}
+                        for err in exc.errors()
+                    ]
+                },
                 trace_id=trace_id_var.get(),
             ),
         )

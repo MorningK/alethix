@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+import json
+from collections.abc import Sequence
 from typing import Any
 
 from redis.asyncio import Redis
@@ -82,3 +84,89 @@ def key_session_lock(session_id: str) -> str:
 
 def key_sse_events(agent_run_id: str) -> str:
     return f"ask:events:{agent_run_id}"
+
+
+# ---------------- 任务队列（M1 文档入库） ----------------
+def key_ingest_queue() -> str:
+    return "queue:ingest"
+
+
+def key_purge_queue() -> str:
+    return "queue:purge"
+
+
+def key_doc_retry(document_id: str) -> str:
+    return f"doc:retry:{document_id}"
+
+
+async def enqueue_ingest(document_id: str) -> None:
+    """投递入库任务（API-2 上传成功后调用）。"""
+    await get_redis().rpush(key_ingest_queue(), document_id)
+
+
+async def enqueue_purge(document_id: str) -> None:
+    """投递物理清理任务（API-5 软删成功后调用）。"""
+    await get_redis().rpush(key_purge_queue(), document_id)
+
+
+async def pop_task(queues: Sequence[str], timeout: int = 5) -> tuple[str, str] | None:
+    """阻塞弹出任务，返回 (队列名, document_id)；超时返回 None。
+
+    BLPOP 的服务端阻塞时间必须小于客户端 socket_timeout——redis-py 不会为阻塞命令
+    延长 socket 超时，否则空闲时连接先被客户端断开并抛 TimeoutError。无 socket_timeout
+    配置时保持调用方传入的 timeout。
+    """
+    client = get_redis()
+    socket_timeout = client.connection_pool.connection_kwargs.get("socket_timeout")
+    if socket_timeout is not None:
+        timeout = min(timeout, max(1, int(socket_timeout) - 1))
+    result = await client.blpop(list(queues), timeout=timeout)
+    if result is None:
+        return None
+    queue_name, document_id = result
+    return queue_name, document_id
+
+
+async def set_doc_task(document_id: str, payload: dict[str, Any], ttl_seconds: int) -> None:
+    """写入任务状态快照（API-3 快路径数据源），统一带 TTL。"""
+    await get_redis().set(
+        key_doc_task(document_id), json.dumps(payload, ensure_ascii=False), ex=ttl_seconds
+    )
+
+
+async def get_doc_task(document_id: str) -> dict[str, Any] | None:
+    """读取任务状态快照；不存在或损坏时返回 None（回退 PostgreSQL）。"""
+    raw = await get_redis().get(key_doc_task(document_id))
+    if raw is None:
+        return None
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+async def delete_doc_task(document_id: str) -> None:
+    """删除任务状态快照（软删后立即使 API-3 回退 PostgreSQL，避免查到已删文档）。"""
+    await get_redis().delete(key_doc_task(document_id))
+
+
+async def acquire_doc_lock(document_id: str, ttl_seconds: int = 600) -> bool:
+    """获取文档处理幂等锁（prd/04 §7.1 doc:lock:{id}），已被持有返回 False。"""
+    return bool(await get_redis().set(key_doc_lock(document_id), "1", nx=True, ex=ttl_seconds))
+
+
+async def release_doc_lock(document_id: str) -> None:
+    await get_redis().delete(key_doc_lock(document_id))
+
+
+async def next_retry_count(document_id: str, ttl_seconds: int = 86400) -> int:
+    """重试计数自增并返回（worker 有限重试）。"""
+    client = get_redis()
+    count = int(await client.incr(key_doc_retry(document_id)))
+    await client.expire(key_doc_retry(document_id), ttl_seconds)
+    return count
+
+
+async def clear_retry_count(document_id: str) -> None:
+    await get_redis().delete(key_doc_retry(document_id))
