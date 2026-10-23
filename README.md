@@ -54,6 +54,7 @@ docker compose --profile local-emb up -d
 
 ```bash
 uv sync                                        # 安装依赖
+uv run alembic upgrade head                    # 应用数据库迁移（documents / chunks）
 uv run python scripts/init_qdrant.py           # 初始化向量集合与索引
 uv run uvicorn app.main:app --port 8000 --reload
 ```
@@ -74,6 +75,17 @@ npm run dev          # http://localhost:5173
 ```
 
 前端通过 Vite proxy 把 `/api` 转发到后端，开发期无需配置 CORS。
+
+### 6. 启动入库 worker（M1 起必需）
+
+文档上传后进入异步入库队列，必须单独运行 worker 消费：
+
+```bash
+uv run python -m workers.ingest_worker
+```
+
+worker 消费 `queue:ingest`（解析 / 切片 / 向量化 / 写 Qdrant）与 `queue:purge`
+（软删文档的物理清理）两类任务，带幂等锁与有限重试；Ctrl+C 优雅退出。
 
 ---
 
@@ -126,8 +138,8 @@ npm run dev          # http://localhost:5173
 │   ├── models/             # SQLAlchemy ORM
 │   ├── schemas/            # Pydantic DTO
 │   └── db/                 # postgres / redis
-├── workers/                # 异步任务（入库、清理与对账）
-├── migrations/             # Alembic
+├── workers/                # 异步任务（ingest_worker 消费 queue:ingest / queue:purge）
+├── migrations/             # Alembic（versions/ 下为迁移脚本，env.py 异步迁移）
 ├── scripts/                # init_qdrant、eval_runner
 ├── tests/                  # 单元测试
 ├── web/                    # 前端工程
@@ -151,13 +163,15 @@ npm run dev          # http://localhost:5173
 
 ### 后端
 
-| 命令                                           | 说明           |
-| ---------------------------------------------- | -------------- |
-| `uv sync`                                      | 安装依赖       |
-| `uv run uvicorn app.main:app --reload`         | 启动开发服务   |
-| `uv run pytest`                                | 运行测试       |
-| `uv run ruff check .` / `uv run ruff format .` | 检查 / 格式化  |
-| `uv run python scripts/init_qdrant.py`         | 初始化向量集合 |
+| 命令                                           | 说明            |
+| ---------------------------------------------- | --------------- |
+| `uv sync`                                      | 安装依赖        |
+| `uv run uvicorn app.main:app --reload`         | 启动开发服务    |
+| `uv run pytest`                                | 运行测试        |
+| `uv run ruff check .` / `uv run ruff format .` | 检查 / 格式化   |
+| `uv run python scripts/init_qdrant.py`         | 初始化向量集合  |
+| `uv run alembic upgrade head`                  | 应用数据库迁移  |
+| `uv run python -m workers.ingest_worker`       | 启动入库 worker |
 
 ### 前端
 
@@ -233,10 +247,38 @@ Qdrant 存储格式跨版本不保证兼容。`docker-compose.yml` 中固定为 
 的 `>=1.12,<1.14` 约束对齐）。**切勿直接改版本号后重建容器**，否则会因 segment 反序列化失败
 导致启动崩溃。升级前请先备份或确认迁移路径。
 
-### 3. 业务功能尚未实现
+### 3. 业务功能进度说明
 
-当前为工程骨架阶段，文档解析、切片、向量化、LangGraph 节点、完整前端页面均为**带契约注释的占位实现**。
+当前进度：**M0 基础设施 + M1 文档入库已完成**，M2~~M6 及前端 F2~~F5 待实现。
+
+M1 已打通「上传 → 解析 → 切片 → 向量化 → 入库」链路（API-2 ~ API-5 + ingest worker），
+ask / sessions / LangGraph 节点仍为带契约注释的占位实现（返回 501），
 各占位模块均标注了对应的需求编号与里程碑，可据此继续填充。
+
+已知偏差：`documents.user_id` 暂无 `users` 外键（DDL 中的 users 表随鉴权里程碑 M6 建立时补齐）。
+
+### 4. M1 手工端到端验证
+
+```bash
+docker compose up -d                                   # 中间件
+uv run alembic upgrade head                            # 迁移
+uv run python -m workers.ingest_worker                 # 另开一个终端跑 worker
+
+# 上传（X-User-Id 为任意 UUID，缺失返回 401）
+curl -X POST http://127.0.0.1:8000/api/v1/documents/upload \
+  -H "X-User-Id: 9f2c1a8e-3b4d-4f6a-8c21-0e5d7a9b1c34" \
+  -F "file=@./some.pdf"
+
+# 轮询状态直至 ready（六态：uploaded → parsing → chunking → embedding → ready）
+curl -H "X-User-Id: <uuid>" http://127.0.0.1:8000/api/v1/documents/<document_id>/status
+
+# 删除（软删 + 异步清理 Qdrant Point 与本地文件）
+curl -X DELETE -H "X-User-Id: <uuid>" \
+  http://127.0.0.1:8000/api/v1/documents/<document_id>
+```
+
+重复上传同一文件返回 `deduplicated: true`；空文档 / 扫描件 / 加密 PDF 返回
+`4001004`；处理中的文档删除返回 `4091002`。
 
 ---
 
@@ -262,7 +304,7 @@ Qdrant 存储格式跨版本不保证兼容。`docker-compose.yml` 中固定为 
 | 阶段 | 内容                                       | 状态      |
 | ---- | ------------------------------------------ | --------- |
 | M0   | 基础设施（中间件、配置体系）               | ✅ 已完成 |
-| M1   | 文档入库（解析、切片、向量化）             | ⬜ 待实现 |
+| M1   | 文档入库（解析、切片、向量化）             | ✅ 已完成 |
 | M2   | 基础问答（单次检索、带引用答案）           | ⬜ 待实现 |
 | M3   | **多轮调研**（LangGraph 五节点、终止策略） | ⬜ 待实现 |
 | M4   | 流式与会话（SSE、历史、追问）              | ⬜ 待实现 |
