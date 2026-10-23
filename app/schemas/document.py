@@ -64,3 +64,11 @@ class Citation(BaseModel):
     section: str | None = None
     quote: str
     score: float | None = None
+
+
+class DeleteDocumentResponse(BaseModel):
+    """API-5 响应。"""
+
+    document_id: str
+    status: str
+    message: str

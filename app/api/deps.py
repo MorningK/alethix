@@ -10,6 +10,7 @@ from collections.abc import AsyncIterator
 from typing import Annotated
 
 from fastapi import Depends, Header
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings, get_settings
 from app.core.errors import ERR_UNAUTHORIZED, ApiError
@@ -33,6 +34,6 @@ async def session_dep() -> AsyncIterator[None]:
 
 
 # 供路由直接复用的类型别名
-DbSession = Annotated[object, Depends(_get_session)]
+DbSession = Annotated[AsyncSession, Depends(_get_session)]
 CurrentUserId = Annotated[str, Depends(get_user_id)]
 SettingsDep = Annotated[Settings, Depends(get_settings_dep)]
