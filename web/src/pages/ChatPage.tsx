@@ -6,8 +6,10 @@ import { useAppStore } from '@/store/useAppStore';
 export function ChatPage() {
   const { sessionId } = useParams();
   const currentSessionId = useAppStore((state) => state.currentSessionId);
-  const selectedDocIds = useAppStore((state) => state.selectedDocIds);
+  const currentSession = useAppStore((state) => state.currentSession);
   const activeSessionId = sessionId ?? currentSessionId;
+  const session = currentSession?.session_id === activeSessionId ? currentSession : null;
+  const scopeIds = session?.default_document_ids ?? [];
 
   return (
     <div className="flex flex-col gap-5">
@@ -34,17 +36,25 @@ export function ChatPage() {
               </Typography.Text>
             </div>
             <div className="flex flex-col gap-2">
-              <Typography.Text type="secondary">
-                检索范围（
-                {selectedDocIds.length > 0 ? `${selectedDocIds.length} 篇文档` : '全部就绪文档'}）
-              </Typography.Text>
-              <div className="flex flex-wrap gap-2">
-                {selectedDocIds.length > 0 ? (
-                  selectedDocIds.map((id) => <Tag key={id}>{id.slice(0, 8)}…</Tag>)
-                ) : (
-                  <Tag color="blue">全部就绪文档</Tag>
-                )}
-              </div>
+              <Typography.Text type="secondary">检索范围</Typography.Text>
+              {session ? (
+                <>
+                  <Typography.Text type="secondary">
+                    {scopeIds.length > 0 ? `${scopeIds.length} 篇文档` : '全部就绪文档'}
+                  </Typography.Text>
+                  <div className="flex flex-wrap gap-2">
+                    {scopeIds.length > 0 ? (
+                      scopeIds.map((id) => <Tag key={id}>{id.slice(0, 8)}…</Tag>)
+                    ) : (
+                      <Tag color="blue">全部就绪文档</Tag>
+                    )}
+                  </div>
+                </>
+              ) : (
+                <Typography.Text type="secondary">
+                  当前浏览器未保存该会话的检索范围；从文档管理页创建的会话可查看完整范围。
+                </Typography.Text>
+              )}
             </div>
           </div>
         ) : (

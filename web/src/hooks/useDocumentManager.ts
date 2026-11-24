@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { App } from 'antd';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
@@ -8,13 +8,14 @@ import { createSession } from '@/api/sessions';
 import { useAppStore } from '@/store/useAppStore';
 import type {
   DocumentBrief,
+  DocumentStatus,
   DocumentStatusResponse,
   UploadDocumentResponse,
 } from '@/types/document';
 import { toUserMessage } from '@/utils/errorMessages';
 import { useDocumentPolling } from './useDocumentPolling';
 
-const TERMINAL = ['ready', 'failed'];
+const TERMINAL: DocumentStatus[] = ['ready', 'failed'];
 const EMPTY_DOCUMENTS: DocumentBrief[] = [];
 
 function reportError(error: unknown, scope: string): string {
@@ -31,13 +32,15 @@ export function useDocumentManager() {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const [statusFilter, setStatusFilter] = useState('');
-  const [error, setError] = useState<string | null>(null);
+  const [mutationError, setMutationError] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [pendingDocs, setPendingDocs] = useState<DocumentBrief[]>([]);
+  const terminalSeen = useRef<Record<string, boolean>>({});
 
   const selectedDocIds = useAppStore((state) => state.selectedDocIds);
   const setSelectedDocIds = useAppStore((state) => state.setSelectedDocIds);
-  const setCurrentSessionId = useAppStore((state) => state.setCurrentSessionId);
+  const setCurrentSession = useAppStore((state) => state.setCurrentSession);
+  const removeDocId = useAppStore((state) => state.removeDocId);
 
   const documentsQuery = useQuery({
     queryKey: ['documents', page, pageSize, statusFilter],
@@ -52,23 +55,37 @@ export function useDocumentManager() {
   const documents = documentsQuery.data?.items ?? EMPTY_DOCUMENTS;
   const total = documentsQuery.data?.total ?? 0;
 
-  const processingDocs = useMemo(() => {
+  const listError = useMemo(
+    () => (documentsQuery.error ? reportError(documentsQuery.error, 'documents') : null),
+    [documentsQuery.error],
+  );
+  const error = mutationError ?? listError;
+
+  const handlePolledStatus = useCallback(
+    (documentId: string, status: DocumentStatusResponse) => {
+      if (TERMINAL.includes(status.status) && !terminalSeen.current[documentId]) {
+        terminalSeen.current[documentId] = true;
+        void queryClient.invalidateQueries({ queryKey: ['documents'] });
+      }
+    },
+    [queryClient],
+  );
+
+  const mergedDocs = useMemo(() => {
     const merged = new Map<string, DocumentBrief>();
     pendingDocs.forEach((doc) => merged.set(doc.document_id, doc));
     documents.forEach((doc) => merged.set(doc.document_id, doc));
-    return Array.from(merged.values()).filter((doc) => !TERMINAL.includes(doc.status));
+    return Array.from(merged.values());
   }, [pendingDocs, documents]);
 
-  // 失败文档为终态，不再轮询状态变化；仅在列表刷新时拉取一次错误详情。
-  const trackedDocs = useMemo(() => {
-    const tracked = new Map(processingDocs.map((doc) => [doc.document_id, doc]));
-    documents
-      .filter((doc) => doc.status === 'failed')
-      .forEach((doc) => tracked.set(doc.document_id, doc));
-    return Array.from(tracked.values());
-  }, [processingDocs, documents]);
+  // 非 ready 文档都追踪一次：非终态持续轮询，failed 仅拉取一次错误详情。
+  const trackedDocs = useMemo(
+    () => mergedDocs.filter((doc) => doc.status !== 'ready'),
+    [mergedDocs],
+  );
+  const trackedIds = useMemo(() => trackedDocs.map((doc) => doc.document_id), [trackedDocs]);
 
-  const polls = useDocumentPolling(trackedDocs.map((doc) => doc.document_id));
+  const polls = useDocumentPolling(trackedIds, 2000, handlePolledStatus);
 
   const statusById = useMemo(() => {
     const result: Record<string, DocumentStatusResponse | undefined> = {};
@@ -78,17 +95,19 @@ export function useDocumentManager() {
     return result;
   }, [trackedDocs, polls]);
 
-  const selectedIds = useMemo(
+  // 轮询确认终态后，即使该文档被筛选条件排除，也不再显示为处理中。
+  const processingDocs = useMemo(
     () =>
-      selectedDocIds.filter((id) =>
-        documents.some((doc) => doc.document_id === id && doc.status === 'ready'),
-      ),
-    [selectedDocIds, documents],
+      mergedDocs.filter((doc) => {
+        const effectiveStatus = statusById[doc.document_id]?.status ?? doc.status;
+        return !TERMINAL.includes(effectiveStatus);
+      }),
+    [mergedDocs, statusById],
   );
 
   const handleUploaded = useCallback(
     (result: UploadDocumentResponse) => {
-      setError(null);
+      setMutationError(null);
       if (!result.deduplicated) {
         setPendingDocs((prev) => [
           ...prev,
@@ -108,7 +127,8 @@ export function useDocumentManager() {
 
   const deleteMutation = useMutation({
     mutationFn: (documentId: string) => deleteDocument(documentId),
-    onSuccess: (result) => {
+    onSuccess: (result, documentId) => {
+      removeDocId(documentId);
       message.success(result.message || '删除请求已提交');
       window.setTimeout(() => {
         void queryClient.invalidateQueries({ queryKey: ['documents'] });
@@ -116,7 +136,7 @@ export function useDocumentManager() {
     },
     onError: (err) => {
       const text = reportError(err, 'delete');
-      setError(text);
+      setMutationError(text);
       message.error(text);
     },
     onSettled: () => setDeletingId(null),
@@ -129,14 +149,14 @@ export function useDocumentManager() {
         default_document_ids: ids,
       }),
     onSuccess: (session) => {
-      setCurrentSessionId(session.session_id);
-      setSelectedDocIds(selectedIds);
+      setCurrentSession(session);
+      setSelectedDocIds(selectedDocIds);
       message.success('会话已创建，已带入所选文档范围');
       navigate(`/chat/${session.session_id}`);
     },
     onError: (err) => {
       const text = reportError(err, 'session');
-      setError(text);
+      setMutationError(text);
       message.error(text);
     },
   });
@@ -158,15 +178,13 @@ export function useDocumentManager() {
     page,
     pageSize,
     statusFilter,
-    selectedIds,
+    selectedIds: selectedDocIds,
     deletingId,
     error,
     processingDocs,
     statusById,
-    uploading: false,
     asking: askMutation.isPending,
     onUploaded: handleUploaded,
-    onError: (value: string) => setError(value),
     onStatusFilterChange: handleStatusFilterChange,
     onPageChange: handlePageChange,
     onSelectedIdsChange: setSelectedDocIds,
@@ -174,7 +192,10 @@ export function useDocumentManager() {
       setDeletingId(documentId);
       deleteMutation.mutate(documentId);
     },
-    onAsk: () => askMutation.mutate(selectedIds),
-    clearError: () => setError(null),
+    onAsk: () => askMutation.mutate(selectedDocIds),
+    onRetry: () => {
+      void documentsQuery.refetch();
+    },
+    clearError: () => setMutationError(null),
   };
 }

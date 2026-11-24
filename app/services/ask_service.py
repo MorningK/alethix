@@ -23,6 +23,7 @@ from app.core.errors import (
     ERR_ASK_TOO_MANY_DOCS,
     ERR_INTERNAL,
     ERR_SESSION_NOT_FOUND,
+    ERR_SESSION_PARAM,
     ApiError,
 )
 from app.core.logging import get_logger, safe_extra
@@ -42,6 +43,10 @@ def _validate_payload(payload: AskRequest) -> None:
         raise ApiError(ERR_ASK_BAD_QUESTION, "question 必须为 1 ~ 2000 个字符", status=400)
     if not 1 <= payload.max_iterations <= 10:
         raise ApiError(ERR_ASK_BAD_MAX_ITER, "max_iterations 必须在 1 ~ 10 之间", status=400)
+    try:
+        uuid.UUID(str(payload.session_id))
+    except (ValueError, AttributeError, TypeError) as exc:
+        raise ApiError(ERR_SESSION_PARAM, "session_id 不是合法 UUID", status=400) from exc
 
 
 def _normalize_document_ids(document_ids: list[str]) -> list[str]:
@@ -131,80 +136,100 @@ async def _persist(
     """在一个事务中写入消息、运行记录、迭代、答案与引用。"""
     run_id = str(uuid.uuid4())
     answer_id = str(uuid.uuid4())
-    seq = int(chat_session.message_count or 0)
-
-    messages = [
-        Message(
-            session_id=chat_session.id,
-            role="user",
-            content=payload.question,
-            seq=seq + 1,
-        ),
-        Message(
-            session_id=chat_session.id,
-            role="assistant",
-            content=answer_text,
-            agent_run_id=run_id,
-            seq=seq + 2,
-        ),
-    ]
-    agent_run = AgentRun(
-        id=run_id,
-        session_id=chat_session.id,
-        user_id=user_id,
-        question=payload.question,
-        document_ids=list(scope_ids),
-        max_iterations=payload.max_iterations,
-        status="done",
-        stop_reason=stop_reason,
-        iteration_count=1,
-        retrieved_chunk_count=len(hits),
-        citation_count=len(citations),
-        citation_filtered_count=citation_filtered_count,
-        token_used=0,
-        llm_call_count=0 if stop_reason == "low_relevance" else 1,
-        duration_ms=duration_ms,
-    )
-    iteration = Iteration(
-        agent_run_id=run_id,
-        iteration=1,
-        queries=[payload.question],
-        retrieved_chunk_count=len(hits),
-        new_chunk_count=len(hits),
-        findings=list(generated.findings),
-        conflicts=list(generated.conflicts),
-        decision="answer",
-        reason=generated.reason or None,
-        missing_information=None,
-    )
-    answer = Answer(
-        id=answer_id,
-        agent_run_id=run_id,
-        session_id=chat_session.id,
-        content=answer_text,
-        confidence=confidence,
-        stop_reason=stop_reason,
-    )
-    citation_rows = [
-        CitationORM(
-            answer_id=answer_id,
-            agent_run_id=run_id,
-            document_id=citation.document_id,
-            chunk_id=citation.chunk_id,
-            filename=citation.filename,
-            page=citation.page,
-            section=citation.section,
-            quote=citation.quote,
-            ordinal=ordinal,
-            score=citation.score,
-        )
-        for ordinal, citation in enumerate(citations, start=1)
-    ]
 
     try:
-        chat_session.message_count = seq + 2
+        # 检索与生成完成后才锁定会话行，避免跨 LLM 调用持锁。
+        locked_result = await db.execute(
+            select(Session)
+            .where(
+                Session.id == chat_session.id,
+                Session.user_id == user_id,
+                Session.deleted_at.is_(None),
+            )
+            .with_for_update()
+        )
+        locked = locked_result.scalar_one_or_none()
+        if locked is None:
+            raise ApiError(ERR_SESSION_NOT_FOUND, "会话不存在", status=404)
+
+        seq = int(locked.message_count or 0)
+        if seq == 0 and not locked.title:
+            locked.title = payload.question.strip()[:20]
+
+        messages = [
+            Message(
+                session_id=locked.id,
+                role="user",
+                content=payload.question,
+                seq=seq + 1,
+            ),
+            Message(
+                session_id=locked.id,
+                role="assistant",
+                content=answer_text,
+                agent_run_id=run_id,
+                seq=seq + 2,
+            ),
+        ]
+        agent_run = AgentRun(
+            id=run_id,
+            session_id=locked.id,
+            user_id=user_id,
+            question=payload.question,
+            document_ids=list(scope_ids),
+            max_iterations=payload.max_iterations,
+            status="done",
+            stop_reason=stop_reason,
+            iteration_count=1,
+            retrieved_chunk_count=len(hits),
+            citation_count=len(citations),
+            citation_filtered_count=citation_filtered_count,
+            token_used=0,
+            llm_call_count=0 if stop_reason == "low_relevance" else 1,
+            duration_ms=duration_ms,
+        )
+        iteration = Iteration(
+            agent_run_id=run_id,
+            iteration=1,
+            queries=[payload.question],
+            retrieved_chunk_count=len(hits),
+            new_chunk_count=len(hits),
+            findings=list(generated.findings),
+            conflicts=list(generated.conflicts),
+            decision="answer",
+            reason=generated.reason or None,
+            missing_information=None,
+        )
+        answer = Answer(
+            id=answer_id,
+            agent_run_id=run_id,
+            session_id=locked.id,
+            content=answer_text,
+            confidence=confidence,
+            stop_reason=stop_reason,
+        )
+        citation_rows = [
+            CitationORM(
+                answer_id=answer_id,
+                agent_run_id=run_id,
+                document_id=citation.document_id,
+                chunk_id=citation.chunk_id,
+                filename=citation.filename,
+                page=citation.page,
+                section=citation.section,
+                quote=citation.quote,
+                ordinal=ordinal,
+                score=citation.score,
+            )
+            for ordinal, citation in enumerate(citations, start=1)
+        ]
+
+        locked.message_count = seq + 2
         db.add_all([*messages, agent_run, iteration, answer, *citation_rows])
         await db.commit()
+    except ApiError:
+        await db.rollback()
+        raise
     except Exception as exc:  # noqa: BLE001
         await db.rollback()
         logger.warning("问答结果持久化失败", extra=safe_extra(reason=type(exc).__name__))
@@ -235,13 +260,19 @@ async def run_single_ask(
         raise ApiError(ERR_INTERNAL, "问答范围校验失败", status=500) from exc
 
     try:
-        hits = await retrieval_service.search(
-            query=payload.question.strip(),
-            user_id=user_id,
-            document_ids=scope_ids or None,
-            top_k=s.agent_top_k_per_query,
-            score_threshold=s.agent_score_threshold,
-            settings=s,
+        # 空范围不能退化为「仅按 user_id 检索」：Qdrant 中可能存在尚未 ready
+        # 或软删未清理的切片。此时直接走无证据答案分支。
+        hits = (
+            await retrieval_service.search(
+                query=payload.question.strip(),
+                user_id=user_id,
+                document_ids=scope_ids,
+                top_k=s.agent_top_k_per_query,
+                score_threshold=s.agent_score_threshold,
+                settings=s,
+            )
+            if scope_ids
+            else []
         )
         generated = await answer_service.generate_answer(payload.question.strip(), hits, s)
     except ApiError:

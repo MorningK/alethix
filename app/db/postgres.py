@@ -38,7 +38,6 @@ def init_postgres(settings: Settings) -> None:
         poolclass=NullPool if is_test else None,
         pool_size=None if is_test else settings.postgres_pool_size,
         max_overflow=None if is_test else 10,
-        json_serializer=lambda obj: obj,
     )
     _session_factory = async_sessionmaker(
         bind=_engine,

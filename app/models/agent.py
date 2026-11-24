@@ -156,8 +156,16 @@ class Citation(Base):
     answer_id: Mapped[str] = mapped_column(
         UUID(as_uuid=False), ForeignKey("answers.id", ondelete="CASCADE"), nullable=False
     )
-    agent_run_id: Mapped[str] = mapped_column(UUID(as_uuid=False), nullable=False)
-    document_id: Mapped[str] = mapped_column(UUID(as_uuid=False), nullable=False)
+    agent_run_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("agent_runs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    document_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("documents.id", ondelete="CASCADE"),
+        nullable=False,
+    )
     chunk_id: Mapped[str] = mapped_column(
         UUID(as_uuid=False), ForeignKey("chunks.id", ondelete="CASCADE"), nullable=False
     )

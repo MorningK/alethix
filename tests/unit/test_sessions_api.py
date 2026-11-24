@@ -87,3 +87,14 @@ def test_create_session_maps_service_error(client, monkeypatch):
     response = http.post("/api/v1/sessions", headers=HEADERS, json={"title": "研读报告"})
     assert response.status_code == 400
     assert response.json()["error"]["code"] == ERR_SESSION_PARAM
+
+
+def test_create_session_invalid_body_uses_session_error_code(client):
+    http, _ = client
+    response = http.post(
+        "/api/v1/sessions",
+        headers=HEADERS,
+        json={"default_document_ids": None},
+    )
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == ERR_SESSION_PARAM

@@ -17,7 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.core.config import get_settings
-from app.core.errors import ERR_DOC_PARAM, ERR_INTERNAL, ApiError, error_response
+from app.core.errors import ERR_DOC_PARAM, ERR_INTERNAL, ERR_SESSION_PARAM, ApiError, error_response
 from app.core.logging import get_logger, safe_extra, setup_logging, trace_id_var, user_id_var
 from app.db import postgres, redis
 from app.services import qdrant_service
@@ -126,12 +126,17 @@ def create_app() -> FastAPI:
     async def validation_error_handler(
         request: Request, exc: RequestValidationError
     ) -> JSONResponse:
-        # 统一错误响应（prd/05-api-spec.md §1.5）：参数校验失败映射 4001001，
-        # 避免 FastAPI 默认 422 结构破坏前端错误码约定
+        # 统一错误响应（prd/05-api-spec.md §1.5）：默认映射 4001001，
+        # API-1 按契约使用 4004001；其他路由行为保持不变。
+        code = (
+            ERR_SESSION_PARAM
+            if request.url.path.rstrip("/") == "/api/v1/sessions"
+            else ERR_DOC_PARAM
+        )
         return JSONResponse(
             status_code=400,
             content=error_response(
-                code=ERR_DOC_PARAM,
+                code=code,
                 message="请求参数校验失败",
                 details={
                     "errors": [

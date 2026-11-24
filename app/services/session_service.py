@@ -17,16 +17,21 @@ from app.models.session import Session
 from app.schemas.session import SessionCreateRequest, SessionResponse
 
 
-def _normalize_document_ids(document_ids: list[str]) -> list[str]:
-    """校验并归一化文档 UUID，重复值去重且保持输入顺序。"""
+def _normalize_document_ids(document_ids: list[str], max_count: int = 20) -> list[str]:
+    """校验并归一化文档 UUID，set 查重保序，超过上限立即拒绝。"""
     normalized: list[str] = []
+    seen: set[str] = set()
     for raw in document_ids:
         try:
             value = str(uuid.UUID(str(raw)))
         except (ValueError, AttributeError, TypeError) as exc:
             raise ApiError(ERR_SESSION_PARAM, "默认文档 ID 不是合法 UUID", status=400) from exc
-        if value not in normalized:
-            normalized.append(value)
+        if value in seen:
+            continue
+        if len(seen) >= max_count:
+            raise ApiError(ERR_SESSION_PARAM, "会话默认文档不能超过 20 篇", status=400)
+        seen.add(value)
+        normalized.append(value)
     return normalized
 
 
@@ -38,12 +43,12 @@ async def create_session(
 ) -> SessionResponse:
     """创建会话（API-1）。default_document_ids 必须为用户已就绪的文档。"""
     title = payload.title.strip() if isinstance(payload.title, str) else None
+    if title and "\x00" in title:
+        raise ApiError(ERR_SESSION_PARAM, "会话标题不能包含 NUL 字符", status=400)
     if title and len(title) > 255:
         raise ApiError(ERR_SESSION_PARAM, "会话标题不能超过 255 个字符", status=400)
 
     document_ids = _normalize_document_ids(payload.default_document_ids)
-    if len(document_ids) > 20:
-        raise ApiError(ERR_SESSION_PARAM, "会话默认文档不能超过 20 篇", status=400)
 
     if document_ids:
         result = await db.execute(

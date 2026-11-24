@@ -3,9 +3,10 @@ import { Alert, Button } from 'antd';
 interface ErrorAlertProps {
   message: string | null;
   onClose: () => void;
+  onRetry?: () => void;
 }
 
-export function ErrorAlert({ message, onClose }: ErrorAlertProps) {
+export function ErrorAlert({ message, onClose, onRetry }: ErrorAlertProps) {
   if (!message) return null;
   return (
     <Alert
@@ -13,9 +14,16 @@ export function ErrorAlert({ message, onClose }: ErrorAlertProps) {
       showIcon
       message={message}
       action={
-        <Button type="text" size="small" onClick={onClose}>
-          关闭
-        </Button>
+        <div className="flex items-center gap-1">
+          {onRetry && (
+            <Button type="link" size="small" onClick={onRetry}>
+              重试
+            </Button>
+          )}
+          <Button type="text" size="small" onClick={onClose}>
+            关闭
+          </Button>
+        </div>
       }
     />
   );
