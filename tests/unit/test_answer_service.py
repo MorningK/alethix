@@ -21,6 +21,7 @@ def _settings() -> Settings:
         agent_score_threshold=0.35,
         agent_max_evidence_per_round=2,
         agent_max_chunk_chars=20,
+        llm_max_tokens=2000,
     )
 
 

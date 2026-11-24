@@ -147,6 +147,7 @@ async def _persist(
                 Session.deleted_at.is_(None),
             )
             .with_for_update()
+            .execution_options(populate_existing=True)
         )
         locked = locked_result.scalar_one_or_none()
         if locked is None:

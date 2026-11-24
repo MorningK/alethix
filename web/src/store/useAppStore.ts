@@ -7,17 +7,26 @@ const SESSION_STORAGE_KEY = 'alethix:current-session';
 
 function loadStoredSession(): StoredSession | null {
   if (typeof window === 'undefined') return null;
-  const raw = window.sessionStorage.getItem(SESSION_STORAGE_KEY);
-  if (!raw) return null;
-  return JSON.parse(raw) as StoredSession;
+  try {
+    const raw = window.sessionStorage.getItem(SESSION_STORAGE_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw) as StoredSession;
+  } catch (error) {
+    console.error('[store] 读取会话状态失败', error);
+    return null;
+  }
 }
 
 function saveStoredSession(session: StoredSession | null): void {
   if (typeof window === 'undefined') return;
-  if (session) {
-    window.sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
-  } else {
-    window.sessionStorage.removeItem(SESSION_STORAGE_KEY);
+  try {
+    if (session) {
+      window.sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
+    } else {
+      window.sessionStorage.removeItem(SESSION_STORAGE_KEY);
+    }
+  } catch (error) {
+    console.error('[store] 保存会话状态失败', error);
   }
 }
 

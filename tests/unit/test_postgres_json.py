@@ -1,20 +1,30 @@
 """PostgreSQL asyncpg 引擎的 JSONB 绑定层回归测试。
 
 M2 曾使用 identity json_serializer 导致 list/dict 原样进入 asyncpg codec，
-在真实写库时因缺少 .encode() 而失败。这里不连接数据库，只验证绑定结果。
+在真实写库时因缺少 .encode() 而失败。这里通过应用实际配置的引擎验证绑定结果。
 """
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.ext.asyncio import create_async_engine
+
+from app.core.config import Settings
+from app.db.postgres import close_postgres, get_engine, init_postgres
 
 
 @pytest.fixture(scope="module")
 def bind_processor():
-    engine = create_async_engine("postgresql+asyncpg://user:pass@localhost/db")
-    return JSONB().bind_processor(engine.dialect)
+    init_postgres(
+        Settings(
+            app_env="dev",
+            postgres_dsn="postgresql+asyncpg://user:pass@localhost/db",
+        )
+    )
+    yield JSONB().bind_processor(get_engine().dialect)
+    asyncio.run(close_postgres())
 
 
 @pytest.mark.parametrize(

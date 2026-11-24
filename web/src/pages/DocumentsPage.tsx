@@ -20,7 +20,11 @@ export function DocumentsPage() {
         </Typography.Text>
       </div>
 
-      <ErrorAlert message={manager.error} onClose={manager.clearError} onRetry={manager.onRetry} />
+      <ErrorAlert
+        message={manager.error}
+        onClose={manager.clearError}
+        onRetry={manager.retryable ? manager.onRetry : undefined}
+      />
       <UploadCard onUploaded={manager.onUploaded} />
       <ProcessingList documents={manager.processingDocs} statusById={manager.statusById} />
 

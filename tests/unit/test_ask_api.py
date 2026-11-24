@@ -196,10 +196,12 @@ async def test_persist_locks_session_and_sets_first_turn_title():
     class LockedDb:
         def __init__(self) -> None:
             self.statement = ""
+            self.execution_options: dict = {}
             self.rows: list = []
 
         async def execute(self, stmt, params=None):
             self.statement = str(stmt)
+            self.execution_options = dict(stmt.get_execution_options())
             return SimpleNamespace(scalar_one_or_none=lambda: locked)
 
         def add_all(self, rows) -> None:
@@ -232,6 +234,7 @@ async def test_persist_locks_session_and_sets_first_turn_title():
 
     assert run_id
     assert "FOR UPDATE" in db.statement
+    assert db.execution_options.get("populate_existing") is True
     assert locked.title == question[:20]
     assert locked.message_count == 2
     assert [row.seq for row in db.rows[:2]] == [1, 2]

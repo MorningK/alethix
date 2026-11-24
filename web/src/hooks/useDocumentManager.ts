@@ -33,6 +33,7 @@ export function useDocumentManager() {
   const [pageSize, setPageSize] = useState(10);
   const [statusFilter, setStatusFilter] = useState('');
   const [mutationError, setMutationError] = useState<string | null>(null);
+  const [dismissedListError, setDismissedListError] = useState<unknown>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [pendingDocs, setPendingDocs] = useState<DocumentBrief[]>([]);
   const terminalSeen = useRef<Record<string, boolean>>({});
@@ -59,7 +60,9 @@ export function useDocumentManager() {
     () => (documentsQuery.error ? reportError(documentsQuery.error, 'documents') : null),
     [documentsQuery.error],
   );
-  const error = mutationError ?? listError;
+  const visibleListError = documentsQuery.error === dismissedListError ? null : listError;
+  const error = mutationError ?? visibleListError;
+  const retryable = mutationError === null && visibleListError !== null;
 
   const handlePolledStatus = useCallback(
     (documentId: string, status: DocumentStatusResponse) => {
@@ -184,6 +187,7 @@ export function useDocumentManager() {
     processingDocs,
     statusById,
     asking: askMutation.isPending,
+    retryable,
     onUploaded: handleUploaded,
     onStatusFilterChange: handleStatusFilterChange,
     onPageChange: handlePageChange,
@@ -194,8 +198,15 @@ export function useDocumentManager() {
     },
     onAsk: () => askMutation.mutate(selectedDocIds),
     onRetry: () => {
+      setDismissedListError(null);
       void documentsQuery.refetch();
     },
-    clearError: () => setMutationError(null),
+    clearError: () => {
+      if (mutationError) {
+        setMutationError(null);
+        return;
+      }
+      setDismissedListError(documentsQuery.error ?? null);
+    },
   };
 }
