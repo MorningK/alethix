@@ -137,7 +137,16 @@ class IngestWorker:
             extra=safe_extra(document_id=document_id),
         )
         await asyncio.sleep(backoff)
-        await redis_db.rpush(queue_key, document_id)
+        if queue_key == redis_db.key_ingest_queue():
+            await redis_db.enqueue_ingest(document_id)
+        elif queue_key == redis_db.key_purge_queue():
+            await redis_db.enqueue_purge(document_id)
+        else:
+            logger.error(
+                "未知任务队列，放弃重投",
+                extra=safe_extra(document_id=document_id, queue=queue_key),
+            )
+            return False
         return True
 
     async def _shutdown(self) -> None:

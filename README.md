@@ -241,6 +241,15 @@ EMBEDDING_DIM=1024                            # bge-m3 是 1024 维，非 1536
 QDRANT_COLLECTION=document_chunks_bgem3       # 必须换一个集合，禁止与 1536 维混用
 ```
 
+本地 TEI 默认**无需鉴权**。`docker-compose.yml` 不会向容器传 `API_KEY`，因为空字符串会被 TEI
+当作“启用鉴权但 key 为空”，使 `/v1/embeddings` 返回 401。若确实需要鉴权，必须同时设置
+`TEI_API_KEY` 和非空 `EMBEDDING_API_KEY`（后者不能回退到 `OPENAI_API_KEY`），取消 compose 中
+`API_KEY` 行注释，并重建容器：
+
+```bash
+docker compose --profile local-emb up -d --force-recreate tei
+```
+
 ### 2. Qdrant 升级前必须确认存储兼容性
 
 Qdrant 存储格式跨版本不保证兼容。`docker-compose.yml` 中固定为 `v1.12.x`（与 `qdrant-client`
