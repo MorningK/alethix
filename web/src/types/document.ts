@@ -1,7 +1,7 @@
 /** 文档处理状态（README 状态枚举速查） */
 export type DocumentStatus = 'uploaded' | 'parsing' | 'chunking' | 'embedding' | 'ready' | 'failed';
 
-export type SourceFormat = 'pdf' | 'docx' | 'md' | 'txt' | 'html';
+export type SourceFormat = 'pdf' | 'md' | 'txt';
 
 /** 文档摘要，对应 prd/05-api-spec.md §2.1 */
 export interface DocumentBrief {
@@ -39,6 +39,13 @@ export interface DocumentStatusResponse {
   page_count: number | null;
   updated_at?: string;
   error: DocumentError | null;
+}
+
+/** 删除响应，对应 API-5 */
+export interface DeleteDocumentResponse {
+  document_id: string;
+  status: string;
+  message: string;
 }
 
 /** 引用，对应 prd/05-api-spec.md §2.2 */

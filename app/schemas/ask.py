@@ -29,9 +29,9 @@ class AskRequest(BaseModel):
     """API-6 / API-7 请求体。"""
 
     session_id: str
-    question: str = Field(min_length=1, max_length=2000)
-    document_ids: list[str] = Field(default_factory=list)
-    max_iterations: int = Field(default=3, ge=1, le=10)
+    question: str
+    document_ids: list[str] | None = None
+    max_iterations: int = 3
 
 
 class IterationRecord(BaseModel):

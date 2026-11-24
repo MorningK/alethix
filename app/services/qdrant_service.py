@@ -220,3 +220,25 @@ def count_by_document_id(settings: Settings, user_id: str, document_id: str) -> 
         exact=True,
     )
     return int(result.count)
+
+
+def query_points(
+    settings: Settings,
+    query_vector: list[float],
+    query_filter: Filter,
+    *,
+    limit: int = 10,
+    score_threshold: float | None = None,
+) -> list[Any]:
+    """按命名向量 dense 检索切片，返回带 payload 的命中点。"""
+    client = get_qdrant()
+    result = client.query_points(
+        collection_name=settings.qdrant_collection,
+        query=query_vector,
+        using="dense",
+        query_filter=query_filter,
+        limit=limit,
+        score_threshold=score_threshold,
+        with_payload=True,
+    )
+    return list(result.points)

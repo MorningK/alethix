@@ -1,4 +1,4 @@
-"""问答接口（占位）。
+"""问答接口。
 
 API-6 POST /ask         同步智能问答
 API-7 POST /ask/stream  流式智能问答（SSE）
@@ -11,19 +11,25 @@ from __future__ import annotations
 
 from fastapi import APIRouter, status
 
+from app.api.deps import CurrentUserId, DbSession, SettingsDep
+from app.schemas.ask import AskRequest, AskResponse
 from app.schemas.common import NotImplementedResponse
+from app.services import ask_service
 
 router = APIRouter(tags=["ask"])
 
 
-@router.post("/ask", status_code=status.HTTP_501_NOT_IMPLEMENTED)
-async def ask() -> NotImplementedResponse:
-    """同步问答，返回完整答案与调研轨迹。待 M2 实现。
-
-    请求：{ session_id, question, document_ids?, max_iterations? }
-    响应：{ agent_run_id, answer, confidence, stop_reason, iterations, citations }
-    """
-    return NotImplementedResponse(detail="API-6 同步问答：待 M2 实现", api="API-6")
+@router.post("/ask", response_model=AskResponse)
+async def ask(
+    payload: AskRequest,
+    user_id: CurrentUserId = None,  # type: ignore[assignment]
+    settings: SettingsDep = None,  # type: ignore[assignment]
+    db: DbSession = None,  # type: ignore[assignment]
+) -> AskResponse:
+    """同步单次问答（API-6）。多轮调研由 M3 的 LangGraph 状态机实现。"""
+    return await ask_service.run_single_ask(
+        payload=payload, user_id=user_id, settings=settings, db=db
+    )
 
 
 @router.post("/ask/stream", status_code=status.HTTP_501_NOT_IMPLEMENTED)

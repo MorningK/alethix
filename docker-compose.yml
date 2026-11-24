@@ -176,14 +176,18 @@ services:
     profiles:
       - local-emb
 
+    # 可选鉴权：不存在 tei.env 时不传 API_KEY；存在时从其中读取 API_KEY。
+    # 复制 tei.env.example 为 tei.env 并设置 API_KEY 即可启用，详见 README。
+    env_file:
+      - path: ./tei.env
+        required: false
+
     environment:
       MODEL_ID: ${TEI_MODEL_ID:-BAAI/bge-m3}
       # 仅影响 OpenAI 兼容端点中返回的模型名；留空时等于 MODEL_ID
       SERVED_MODEL_NAME: ${TEI_SERVED_MODEL_NAME:-}
       # 单批最大 token 数，内存不足时可下调
       MAX_BATCH_TOKENS: ${TEI_MAX_BATCH_TOKENS:-16384}
-      # 可选：为 TEI 设置访问密钥，留空表示不鉴权
-      API_KEY: ${TEI_API_KEY:-}
 
     # 有 NVIDIA GPU 时（镜像需换成不带 cpu- 前缀的 GPU 版）取消注释：
     # deploy:

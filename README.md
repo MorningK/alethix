@@ -54,7 +54,7 @@ docker compose --profile local-emb up -d
 
 ```bash
 uv sync                                        # 安装依赖
-uv run alembic upgrade head                    # 应用数据库迁移（documents / chunks）
+uv run alembic upgrade head                    # 应用数据库迁移（documents / chunks / sessions / 问答表）
 uv run python scripts/init_qdrant.py           # 初始化向量集合与索引
 uv run uvicorn app.main:app --port 8000 --reload
 ```
@@ -241,6 +241,18 @@ EMBEDDING_DIM=1024                            # bge-m3 是 1024 维，非 1536
 QDRANT_COLLECTION=document_chunks_bgem3       # 必须换一个集合，禁止与 1536 维混用
 ```
 
+本地 TEI 默认**无需鉴权**。`docker-compose.yml` 通过可选的 `tei.env` 文件传 `API_KEY`：文件不存在时
+完全不传，避免空字符串被 TEI 当作“启用鉴权但 key 为空”而导致 `/v1/embeddings` 返回 401。
+若确实需要鉴权：
+
+1. 复制 `tei.env.example` 为 `tei.env`，并设置非空 `API_KEY`；
+2. 在根目录 `.env` 设置相同的非空 `EMBEDDING_API_KEY`（不能回退到 `OPENAI_API_KEY`）；
+3. 重建容器：
+
+```bash
+docker compose --profile local-emb up -d --force-recreate tei
+```
+
 ### 2. Qdrant 升级前必须确认存储兼容性
 
 Qdrant 存储格式跨版本不保证兼容。`docker-compose.yml` 中固定为 `v1.12.x`（与 `qdrant-client`
@@ -249,11 +261,12 @@ Qdrant 存储格式跨版本不保证兼容。`docker-compose.yml` 中固定为 
 
 ### 3. 业务功能进度说明
 
-当前进度：**M0 基础设施 + M1 文档入库已完成**，M2–M6 及前端 F2–F5 待实现。
+当前进度：**M0 基础设施、M1 文档入库、M2 单次检索问答已完成**，前端 **F1 脚手架、F2 文档管理已完成**；
+M3–M6 与前端 F3–F5 待实现。
 
-M1 已打通「上传 → 解析 → 切片 → 向量化 → 入库」链路（API-2 ~ API-5 + ingest worker），
-ask / sessions / LangGraph 节点仍为带契约注释的占位实现（返回 501），
-各占位模块均标注了对应的需求编号与里程碑，可据此继续填充。
+M1 已打通「上传 → 解析 → 切片 → 向量化 → 入库」链路（API-2 ~ API-5 + ingest worker）。
+M2 已实现 API-1 创建会话与 API-6 单次问答：单次 embedding + Qdrant 检索 + 带引用答案，
+引用只从命中切片白名单生成；`POST /ask/stream` 与 LangGraph 五节点仍为 M3/M4 占位（返回 501）。
 
 已知偏差：`documents.user_id` 暂无 `users` 外键（DDL 中的 users 表随鉴权里程碑 M6 建立时补齐）。
 
@@ -269,7 +282,7 @@ curl -X POST http://127.0.0.1:8000/api/v1/documents/upload \
   -H "X-User-Id: 9f2c1a8e-3b4d-4f6a-8c21-0e5d7a9b1c34" \
   -F "file=@./some.pdf"
 
-# 轮询状态直至 ready（六态：uploaded → parsing → chunking → embedding → ready）
+# 轮询状态直至 ready（六态：uploaded → parsing → chunking → embedding → ready / failed）
 curl -H "X-User-Id: <uuid>" http://127.0.0.1:8000/api/v1/documents/<document_id>/status
 
 # 删除（软删 + 异步清理 Qdrant Point 与本地文件）
@@ -279,6 +292,25 @@ curl -X DELETE -H "X-User-Id: <uuid>" \
 
 重复上传同一文件返回 `deduplicated: true`；空文档 / 扫描件 / 加密 PDF 返回
 `4001004`；处理中的文档删除返回 `4091002`。
+
+### 5. M2 手工验证
+
+```bash
+# 创建会话（default_document_ids 可省略；不填表示全部就绪文档）
+curl -X POST http://127.0.0.1:8000/api/v1/sessions \
+  -H "X-User-Id: <uuid>" \
+  -H "Content-Type: application/json" \
+  -d '{"title":"报告研读","default_document_ids":[]}'
+
+# 单次问答：返回答案、置信度、stop_reason 与带原文摘录的 citations
+curl -X POST http://127.0.0.1:8000/api/v1/ask \
+  -H "X-User-Id: <uuid>" \
+  -H "Content-Type: application/json" \
+  -d '{"session_id":"<session_uuid>","question":"文档提到的主要风险有哪些？","document_ids":[]}'
+```
+
+前端在 `/documents` 完成上传、状态追踪、删除与勾选；点击「基于选中文档发起提问」会创建会话并跳转到 `/chat/<session_id>`。
+问答页当前只承接会话与检索范围，调研时间线与答案面板属于 F3。
 
 ---
 
@@ -305,13 +337,14 @@ curl -X DELETE -H "X-User-Id: <uuid>" \
 | ---- | ------------------------------------------ | --------- |
 | M0   | 基础设施（中间件、配置体系）               | ✅ 已完成 |
 | M1   | 文档入库（解析、切片、向量化）             | ✅ 已完成 |
-| M2   | 基础问答（单次检索、带引用答案）           | ⬜ 待实现 |
+| M2   | 基础问答（单次检索、带引用答案）           | ✅ 已完成 |
 | M3   | **多轮调研**（LangGraph 五节点、终止策略） | ⬜ 待实现 |
 | M4   | 流式与会话（SSE、历史、追问）              | ⬜ 待实现 |
 | M5   | 质量与观测（评测集、指标、对账）           | ⬜ 待实现 |
 | M6   | 生产就绪（限流、部署、压测）               | ⬜ 待实现 |
 
-前端对应 F1~F5 里程碑，详见 [prd/07-frontend.md](./prd/07-frontend.md#11-里程碑与工期估算)。
+前端对应 F1~~F5 里程碑：F1 脚手架与 F2 文档管理已完成，F3~~F5 待实现；
+详见 [prd/07-frontend.md](./prd/07-frontend.md#11-里程碑与工期估算)。
 
 ---
 

@@ -5,14 +5,18 @@ DDL 见 prd/04-data-model.md §3。
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from sqlalchemy import (
     BigInteger,
     CheckConstraint,
+    DateTime,
     ForeignKey,
     Integer,
     String,
     Text,
     UniqueConstraint,
+    func,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -30,7 +34,8 @@ class Session(Base, TimestampMixin):
     title: Mapped[str | None] = mapped_column(String(255))
     default_document_ids: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)
     message_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    deleted_at: Mapped[str | None] = mapped_column(String)  # 占位，M2 改为 DateTime
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class Message(Base):
@@ -50,3 +55,6 @@ class Message(Base):
     content: Mapped[str] = mapped_column(Text, nullable=False)
     agent_run_id: Mapped[str | None] = mapped_column(UUID(as_uuid=False))
     seq: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )

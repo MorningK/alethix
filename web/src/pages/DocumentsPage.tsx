@@ -1,54 +1,63 @@
-import { Card, Empty, Table, Tag, Typography } from 'antd';
-import type { DocumentStatus } from '@/types/document';
+import { Button, Card, Typography } from 'antd';
+import { ArrowRight } from 'lucide-react';
+import { ErrorAlert } from '@/components/common/ErrorAlert';
+import { DocumentTable } from '@/components/document/DocumentTable';
+import { ProcessingList } from '@/components/document/ProcessingList';
+import { UploadCard } from '@/components/document/UploadCard';
+import { useDocumentManager } from '@/hooks/useDocumentManager';
 
-const STATUS_COLOR: Record<DocumentStatus, string> = {
-  uploaded: 'default',
-  parsing: 'blue',
-  chunking: 'blue',
-  embedding: 'blue',
-  ready: 'green',
-  failed: 'red',
-};
-
-/**
- * 文档管理页（占位骨架）。
- * 功能实现见 prd/07-frontend.md §4.3，对应前端里程碑 F2。
- */
 export function DocumentsPage() {
+  const manager = useDocumentManager();
+
   return (
-    <div className="flex flex-col gap-4">
-      <div>
-        <Typography.Title level={4} className="mb-1!">
+    <div className="flex flex-col gap-5">
+      <div className="flex flex-col gap-1">
+        <Typography.Title level={4} className="text-ink mb-0">
           文档管理
         </Typography.Title>
         <Typography.Text type="secondary">
-          上传 PDF / Markdown / TXT，单个文件不超过 50 MB
+          上传 PDF、Markdown 或 TXT，就绪后即可作为问答的可核验依据
         </Typography.Text>
       </div>
 
-      <Card title="上传" className="shadow-none">
-        <Typography.Text type="secondary">
-          上传组件待 F2 实现（AntD Upload 拖拽上传 + 前端校验）
-        </Typography.Text>
-      </Card>
+      <ErrorAlert
+        message={manager.error}
+        onClose={manager.clearError}
+        onRetry={manager.retryable ? manager.onRetry : undefined}
+      />
+      <UploadCard onUploaded={manager.onUploaded} />
+      <ProcessingList documents={manager.processingDocs} statusById={manager.statusById} />
 
-      <Card title="文档列表" className="shadow-none">
-        <Table
-          dataSource={[]}
-          rowKey="document_id"
-          locale={{ emptyText: <Empty description="暂无文档，请先上传" /> }}
-          columns={[
-            { title: '文件名', dataIndex: 'filename' },
-            { title: '格式', dataIndex: 'source_format' },
-            {
-              title: '状态',
-              dataIndex: 'status',
-              render: (status: DocumentStatus) => <Tag color={STATUS_COLOR[status]}>{status}</Tag>,
-            },
-            { title: '切片数', dataIndex: 'chunk_count' },
-          ]}
-          pagination={false}
+      <Card className="shadow-sm">
+        <DocumentTable
+          documents={manager.documents}
+          loading={manager.loading}
+          total={manager.total}
+          page={manager.page}
+          pageSize={manager.pageSize}
+          statusFilter={manager.statusFilter}
+          selectedIds={manager.selectedIds}
+          deletingId={manager.deletingId}
+          statusById={manager.statusById}
+          onStatusFilterChange={manager.onStatusFilterChange}
+          onPageChange={manager.onPageChange}
+          onSelectedIdsChange={manager.onSelectedIdsChange}
+          onDelete={manager.onDelete}
         />
+
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-black/5 pt-4">
+          <Typography.Text type="secondary">
+            已选 {manager.selectedIds.length} 篇就绪文档；未选择时将在全部就绪文档中检索
+          </Typography.Text>
+          <Button
+            type="primary"
+            icon={<ArrowRight size={16} />}
+            loading={manager.asking}
+            onClick={manager.onAsk}
+          >
+            基于选中文档发起提问
+          </Button>
+        </div>
       </Card>
     </div>
   );

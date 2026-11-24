@@ -62,6 +62,7 @@ class Settings(BaseSettings):
     llm_temperature: float = 0
     llm_timeout_seconds: int = 60
     llm_max_retries: int = 3
+    llm_max_tokens: int = 2000
 
     # ---------------- Embedding ----------------
     embedding_model: str = "text-embedding-3-small"

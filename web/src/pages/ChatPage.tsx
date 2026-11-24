@@ -1,28 +1,71 @@
-import { Alert, Card, Empty, Typography } from 'antd';
+import { Alert, Card, Empty, Tag, Typography } from 'antd';
 import { useParams } from 'react-router-dom';
+import { useAppStore } from '@/store/useAppStore';
 
-/**
- * 问答调研页（占位骨架）。
- * 功能实现见 prd/07-frontend.md §4.4，对应前端里程碑 F3 / F4。
- * 调研时间线是核心差异化体验：逐轮展示「查询 → 命中 → 判定」。
- */
+/** 问答调研页：F2 跳转后的会话与检索范围承接，问答 UI 属于 F3。 */
 export function ChatPage() {
   const { sessionId } = useParams();
+  const currentSessionId = useAppStore((state) => state.currentSessionId);
+  const currentSession = useAppStore((state) => state.currentSession);
+  const activeSessionId = sessionId ?? currentSessionId;
+  const session = currentSession?.session_id === activeSessionId ? currentSession : null;
+  const scopeIds = session?.default_document_ids ?? [];
 
   return (
-    <div className="flex flex-col gap-4">
-      <Typography.Title level={4} className="mb-0!">
-        智能问答
-      </Typography.Title>
+    <div className="flex flex-col gap-5">
+      <div className="flex flex-col gap-1">
+        <Typography.Title level={4} className="text-ink mb-0">
+          智能问答
+        </Typography.Title>
+        <Typography.Text type="secondary">
+          会话与检索范围已就绪，可直接接入单次问答与调研时间线
+        </Typography.Text>
+      </div>
 
-      {!sessionId && <Alert type="info" showIcon message="未指定会话，将使用最近会话或新建会话" />}
+      {!activeSessionId && (
+        <Alert type="info" showIcon message="尚未创建会话，请先在文档管理页选择文档并发起提问" />
+      )}
 
-      <Card title="调研过程" className="shadow-none">
-        <Empty description="调研时间线待 F3 实现：按轮次展示查询、命中与判定" />
+      <Card title="会话信息" className="shadow-sm">
+        {activeSessionId ? (
+          <div className="flex flex-col gap-4">
+            <div className="flex flex-wrap items-center gap-3">
+              <Typography.Text type="secondary">会话 ID</Typography.Text>
+              <Typography.Text code copyable>
+                {activeSessionId}
+              </Typography.Text>
+            </div>
+            <div className="flex flex-col gap-2">
+              <Typography.Text type="secondary">检索范围</Typography.Text>
+              {session ? (
+                <>
+                  <Typography.Text type="secondary">
+                    {scopeIds.length > 0 ? `${scopeIds.length} 篇文档` : '全部就绪文档'}
+                  </Typography.Text>
+                  <div className="flex flex-wrap gap-2">
+                    {scopeIds.length > 0 ? (
+                      scopeIds.map((id) => <Tag key={id}>{id.slice(0, 8)}…</Tag>)
+                    ) : (
+                      <Tag color="blue">全部就绪文档</Tag>
+                    )}
+                  </div>
+                </>
+              ) : (
+                <Typography.Text type="secondary">
+                  当前浏览器未保存该会话的检索范围；从文档管理页创建的会话可查看完整范围。
+                </Typography.Text>
+              )}
+            </div>
+          </div>
+        ) : (
+          <Empty description="暂无会话" />
+        )}
       </Card>
 
-      <Card title="答案" className="shadow-none">
-        <Empty description="答案、引用与置信度待 F3 实现" />
+      <Card title="调研过程" className="shadow-sm">
+        <Typography.Text type="secondary">
+          单次检索问答已可通过 API-6 调用；过程可视化与答案引用面板将在 F3 实现。
+        </Typography.Text>
       </Card>
     </div>
   );
