@@ -33,6 +33,7 @@ ERR_DOC_NOT_FOUND = "4041001"  # 文档不存在（越权也返回此码）
 ERR_SESSION_NOT_FOUND = "4044001"  # 会话不存在
 
 ERR_DOC_DELETE_BUSY = "4091002"  # 文档处理中，无法删除
+ERR_SESSION_BUSY = "4094001"  # 同一会话存在并发提问
 
 ERR_AGENT_FAILED = "5003001"  # 智能体执行失败
 ERR_ANSWER_FAILED = "5003002"  # 答案生成失败

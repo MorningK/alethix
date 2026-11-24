@@ -16,6 +16,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from app.agents import runtime as agent_runtime
 from app.core.config import get_settings
 from app.core.errors import ERR_DOC_PARAM, ERR_INTERNAL, ERR_SESSION_PARAM, ApiError, error_response
 from app.core.logging import get_logger, safe_extra, setup_logging, trace_id_var, user_id_var
@@ -46,6 +47,11 @@ async def lifespan(app: FastAPI):
     qdrant_service.init_qdrant(settings)
 
     try:
+        await agent_runtime.init_checkpointer(settings)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("LangGraph checkpointer 初始化失败：%s", exc, exc_info=exc)
+
+    try:
         created = qdrant_service.ensure_collection(settings)
     except Exception as exc:  # noqa: BLE001
         # 仅包裹初始化本身；成功日志放在 else 中，避免日志异常被误报为初始化失败
@@ -61,6 +67,7 @@ async def lifespan(app: FastAPI):
 
     yield
 
+    await agent_runtime.close_checkpointer()
     await postgres.close_postgres()
     await redis.close_redis()
     qdrant_service.close_qdrant()

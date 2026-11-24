@@ -160,6 +160,15 @@ async def release_doc_lock(document_id: str) -> None:
     await get_redis().delete(key_doc_lock(document_id))
 
 
+async def acquire_session_lock(session_id: str, ttl_seconds: int = 120) -> bool:
+    """获取同一会话的问答互斥锁；已被持有返回 False。"""
+    return bool(await get_redis().set(key_session_lock(session_id), "1", nx=True, ex=ttl_seconds))
+
+
+async def release_session_lock(session_id: str) -> None:
+    await get_redis().delete(key_session_lock(session_id))
+
+
 async def next_retry_count(document_id: str, ttl_seconds: int = 86400) -> int:
     """重试计数自增并返回（worker 有限重试）。"""
     client = get_redis()

@@ -261,12 +261,16 @@ Qdrant 存储格式跨版本不保证兼容。`docker-compose.yml` 中固定为 
 
 ### 3. 业务功能进度说明
 
-当前进度：**M0 基础设施、M1 文档入库、M2 单次检索问答已完成**，前端 **F1 脚手架、F2 文档管理已完成**；
-M3–M6 与前端 F3–F5 待实现。
+当前进度：**M0 基础设施、M1 文档入库、M2 单次检索问答、M3 多轮调研已完成**，前端 **F1 脚手架、F2 文档管理已完成**；
+M4–M6 与前端 F3–F5 待实现。
 
 M1 已打通「上传 → 解析 → 切片 → 向量化 → 入库」链路（API-2 ~ API-5 + ingest worker）。
 M2 已实现 API-1 创建会话与 API-6 单次问答：单次 embedding + Qdrant 检索 + 带引用答案，
-引用只从命中切片白名单生成；`POST /ask/stream` 与 LangGraph 五节点仍为 M3/M4 占位（返回 501）。
+引用只从命中切片白名单生成。
+M3 已将 API-6 内部编排升级为 LangGraph 五节点状态机：查询规划 → 并发检索 → 证据分析 →
+充分性决策 → 带引用终答；证据不足时自动追查，命中七类终止策略之一即收尾。
+迁移 `0003_langgraph_checkpoints` 由 Alembic 管理 LangGraph checkpointer 表；
+`POST /ask/stream` 仍属于 M4，当前返回 501。
 
 已知偏差：`documents.user_id` 暂无 `users` 外键（DDL 中的 users 表随鉴权里程碑 M6 建立时补齐）。
 
@@ -312,6 +316,18 @@ curl -X POST http://127.0.0.1:8000/api/v1/ask \
 前端在 `/documents` 完成上传、状态追踪、删除与勾选；点击「基于选中文档发起提问」会创建会话并跳转到 `/chat/<session_id>`。
 问答页当前只承接会话与检索范围，调研时间线与答案面板属于 F3。
 
+### 6. M3 多轮调研说明
+
+`/api/v1/ask` 的请求与响应契约保持不变，内部已切换为多轮调研：
+
+- `iterations` 返回每一轮的查询、召回数、新增证据数、发现、冲突与决策；
+- `stop_reason` 可能是 `sufficient` / `max_iterations_reached` / `no_new_queries` /
+  `no_new_evidence` / `low_relevance` / `budget_exceeded`；
+- `citations` 只接受累计 `used_chunk_ids` 白名单内的引用，`quote` 从切片原文重建；
+- 同一会话在 Redis 可用时使用互斥锁，冲突返回 `4094001`；Redis 不可用时回落到 PostgreSQL 行锁。
+
+启动或迁移后需执行 `uv run alembic upgrade head` 以创建 LangGraph checkpointer 表。
+
 ---
 
 ## 文档
@@ -338,7 +354,7 @@ curl -X POST http://127.0.0.1:8000/api/v1/ask \
 | M0   | 基础设施（中间件、配置体系）               | ✅ 已完成 |
 | M1   | 文档入库（解析、切片、向量化）             | ✅ 已完成 |
 | M2   | 基础问答（单次检索、带引用答案）           | ✅ 已完成 |
-| M3   | **多轮调研**（LangGraph 五节点、终止策略） | ⬜ 待实现 |
+| M3   | **多轮调研**（LangGraph 五节点、终止策略） | ✅ 已完成 |
 | M4   | 流式与会话（SSE、历史、追问）              | ⬜ 待实现 |
 | M5   | 质量与观测（评测集、指标、对账）           | ⬜ 待实现 |
 | M6   | 生产就绪（限流、部署、压测）               | ⬜ 待实现 |
