@@ -1,5 +1,6 @@
 import { http } from './http';
 import type {
+  DeleteDocumentResponse,
   DocumentBrief,
   DocumentStatusResponse,
   UploadDocumentResponse,
@@ -37,5 +38,6 @@ export async function getDocumentStatus(documentId: string) {
 
 /** API-5 删除文档 */
 export async function deleteDocument(documentId: string) {
-  await http.delete(`/documents/${documentId}`);
+  const { data } = await http.delete<DeleteDocumentResponse>(`/documents/${documentId}`);
+  return data;
 }

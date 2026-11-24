@@ -11,19 +11,22 @@ from __future__ import annotations
 
 from fastapi import APIRouter, status
 
+from app.api.deps import CurrentUserId, DbSession
 from app.schemas.common import NotImplementedResponse
+from app.schemas.session import SessionCreateRequest, SessionResponse
+from app.services import session_service
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
 
-@router.post("", status_code=status.HTTP_501_NOT_IMPLEMENTED, response_model=NotImplementedResponse)
-async def create_session() -> NotImplementedResponse:
-    """创建会话。待 M2 实现。
-
-    请求：{ title?, default_document_ids? }
-    响应：{ session_id, title, default_document_ids, message_count, created_at }
-    """
-    return NotImplementedResponse(detail="API-1 创建会话：待 M2 实现", api="API-1")
+@router.post("", status_code=status.HTTP_201_CREATED, response_model=SessionResponse)
+async def create_session(
+    payload: SessionCreateRequest,
+    user_id: CurrentUserId = None,  # type: ignore[assignment]
+    db: DbSession = None,  # type: ignore[assignment]
+) -> SessionResponse:
+    """创建会话（API-1）。默认检索范围必须为用户已就绪的文档。"""
+    return await session_service.create_session(payload=payload, user_id=user_id, db=db)
 
 
 @router.get(
