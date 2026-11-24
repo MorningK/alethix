@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from app.core.config import Settings
 from app.core.errors import ERR_LLM_UNAVAILABLE, ApiError
 from app.schemas.answer import GeneratedAnswer
-from app.services import answer_service, citation_service
+from app.services import answer_service, citation_service, llm_service
 from app.services.retrieval_service import RetrievedChunk
 
 DOC_ID = "3a71b0c2-5e6f-4a8b-9c1d-2e3f4a5b6c7d"
@@ -74,9 +76,12 @@ async def test_generate_answer_returns_structured_result(monkeypatch):
     assert result.used_chunk_ids == [CHUNK_ID]
 
 
-async def test_generate_answer_maps_llm_failure(monkeypatch):
+async def test_generate_answer_maps_llm_failure_after_retry(monkeypatch):
+    calls: list = []
+
     class FailingChain:
         async def ainvoke(self, messages):
+            calls.append(messages)
             raise RuntimeError("llm down")
 
     monkeypatch.setattr(answer_service, "build_llm", lambda *a, **k: FailingChain())
@@ -84,6 +89,7 @@ async def test_generate_answer_maps_llm_failure(monkeypatch):
         await answer_service.generate_answer("风险？", [_hit()], _settings())
     assert exc.value.code == ERR_LLM_UNAVAILABLE
     assert exc.value.status == 503
+    assert len(calls) == 2
 
 
 def test_citations_filter_hallucinated_chunk_ids_and_trim_quote():
@@ -109,3 +115,72 @@ def test_citations_without_declared_ids_use_all_hits():
     )
     assert filtered == 0
     assert len(citations) == 1
+
+
+def test_build_llm_uses_json_mode_and_max_tokens(monkeypatch):
+    captured: dict = {}
+
+    class FakeChat:
+        def __init__(self, **kwargs):
+            captured["init"] = kwargs
+
+        def with_structured_output(self, schema, *, method=None):
+            captured["structured"] = (schema, method)
+            return "chain"
+
+    monkeypatch.setattr(llm_service, "ChatOpenAI", FakeChat)
+    result = llm_service.build_llm(_settings(), structured=GeneratedAnswer)
+
+    assert result == "chain"
+    assert captured["init"]["max_tokens"] == 2000
+    assert captured["structured"][1] == "json_mode"
+
+
+async def test_generate_answer_normalizes_numeric_confidence(monkeypatch):
+    class FakeChain:
+        async def ainvoke(self, messages):
+            return SimpleNamespace(
+                answer="主要风险是数据合规风险。",
+                confidence=0.95,
+                findings=["第 5 页提到数据合规风险"],
+                used_chunk_ids=[CHUNK_ID],
+                reason="证据充分",
+                conflicts=[],
+            )
+
+    monkeypatch.setattr(answer_service, "build_llm", lambda *a, **k: FakeChain())
+    result = await answer_service.generate_answer("风险？", [_hit()], _settings())
+    assert result.confidence == "high"
+
+
+async def test_generate_answer_retries_empty_payload(monkeypatch):
+    calls: list = []
+
+    class RetryChain:
+        async def ainvoke(self, messages):
+            calls.append(messages)
+            if len(calls) == 1:
+                return SimpleNamespace(
+                    answer="",
+                    confidence="high",
+                    findings=[],
+                    used_chunk_ids=[],
+                    reason="",
+                    conflicts=[],
+                )
+            return SimpleNamespace(
+                answer="证据显示存在数据合规风险。",
+                confidence="medium",
+                findings=["第 5 页有相关描述"],
+                used_chunk_ids=[CHUNK_ID],
+                reason="证据充分",
+                conflicts=[],
+            )
+
+    monkeypatch.setattr(answer_service, "build_llm", lambda *a, **k: RetryChain())
+    result = await answer_service.generate_answer("风险？", [_hit()], _settings())
+
+    assert len(calls) == 2
+    assert answer_service._RETRY_HINT in calls[1][0][1]
+    assert result.answer == "证据显示存在数据合规风险。"
+    assert result.confidence == "medium"

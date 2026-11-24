@@ -6,7 +6,8 @@
 ChatOpenAI 关键参数（已核对 langchain-openai 文档）：
     model / temperature / timeout / max_retries / api_key / base_url
     - 指向非 OpenAI 端点时显式设置 use_responses_api=False，避免模型名推断走 Responses API
-    - 结构化输出：model.with_structured_output(Schema)
+    - 结构化输出：model.with_structured_output(Schema, method='json_mode')
+  DeepSeek 等 OpenAI 兼容端点不支持 json_schema，只支持 json_object（JSON Output）。
 
 实现阶段：M2。
 """
@@ -35,13 +36,14 @@ def build_llm(settings: Settings, *, structured: type[T] | None = None):
         temperature=settings.llm_temperature,
         timeout=settings.llm_timeout_seconds,
         max_retries=settings.llm_max_retries,
+        max_tokens=settings.llm_max_tokens,
         api_key=settings.resolved_llm_api_key,
         base_url=settings.resolved_llm_base_url,
         # 兼容 vLLM / DeepSeek / Qwen 等 OpenAI 兼容端点
         use_responses_api=False,
     )
     if structured is not None:
-        return llm.with_structured_output(structured)
+        return llm.with_structured_output(structured, method="json_mode")
     return llm
 
 
