@@ -66,6 +66,8 @@ class IterationRecord(BaseModel):
     conflicts: list[str] = Field(default_factory=list)
     decision: Literal["continue", "answer"]
     reason: str = ""
+    max_score: float | None = None
+    missing_information: str | None = None
 
 
 class AgentState(TypedDict):

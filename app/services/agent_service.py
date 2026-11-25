@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from time import monotonic
 
@@ -121,6 +122,25 @@ def _to_citations(state: AgentState, metrics: dict) -> list[Citation]:
     ]
 
 
+def _timeout_state(state: AgentState) -> AgentState:
+    """硬超时后返回保守收尾状态，不再发起额外 LLM 调用。"""
+    findings = list(state.get("findings") or [])
+    detail = (
+        "\n".join(f"- {item}" for item in findings[:5])
+        if findings
+        else "当前证据不足以形成可靠答案。"
+    )
+    result: dict = dict(state)
+    result.update(
+        final_answer=f"因检索规模受限，以下结论可能不完整。\n{detail}",
+        confidence="low",
+        citations=[],
+        stop_reason="budget_exceeded",
+        status="done",
+    )
+    return result  # type: ignore[return-value]
+
+
 async def run_research(
     *,
     agent_run_id: str,
@@ -151,7 +171,14 @@ async def run_research(
     started_at = state["started_at"]
 
     try:
-        final_state = await get_graph().ainvoke(state, config=config)
+        final_state = await asyncio.wait_for(
+            get_graph().ainvoke(state, config=config), timeout=s.agent_timeout_seconds
+        )
+    except TimeoutError:
+        logger.warning(
+            "多轮调研硬超时，返回保守收尾结果", extra=safe_extra(agent_run_id=agent_run_id)
+        )
+        final_state = _timeout_state(state)
     except ApiError:
         raise
     except Exception as exc:  # noqa: BLE001

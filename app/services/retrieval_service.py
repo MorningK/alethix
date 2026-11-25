@@ -23,6 +23,15 @@ from app.services.embedding_service import embed_texts
 logger = get_logger(__name__)
 
 
+def _query_cache_key(query: str, settings: Settings) -> str:
+    return redis_db.key_embedding_cache(
+        query,
+        embedding_model=settings.embedding_model,
+        embedding_base_url=settings.resolved_embedding_base_url,
+        embedding_dim=settings.embedding_dim,
+    )
+
+
 @dataclass(frozen=True)
 class RetrievedChunk:
     """归一化后的检索命中，供答案生成与引用构造复用。"""
@@ -53,10 +62,10 @@ async def search(
     try:
         cached = None
         try:
-            raw = await redis_db.get_redis().get(redis_db.key_embedding_cache(query))
+            raw = await redis_db.get_redis().get(_query_cache_key(query, s))
             if raw:
                 candidate = json.loads(raw)
-                if isinstance(candidate, list):
+                if isinstance(candidate, list) and candidate:
                     cached = [float(value) for value in candidate]
         except Exception:  # noqa: BLE001
             cached = None
@@ -68,7 +77,7 @@ async def search(
             if vectors:
                 try:
                     await redis_db.get_redis().set(
-                        redis_db.key_embedding_cache(query),
+                        _query_cache_key(query, s),
                         json.dumps(vectors[0]),
                         ex=s.agent_embedding_cache_ttl_seconds,
                     )

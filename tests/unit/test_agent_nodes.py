@@ -294,3 +294,68 @@ async def test_final_answer_low_relevance_skips_llm():
     assert llm.calls == []
     assert result["confidence"] == "low"
     assert result["final_answer"] == nodes.LOW_RELEVANCE_ANSWER
+
+
+async def test_final_answer_keeps_partial_answer_when_evidence_exists():
+    hit = ServiceHit(chunk_id="chunk-1", document_id="doc-1", content="合规风险", score=0.9)
+    llm = FakeLLM(
+        _result(
+            FinalAnswerOutput(
+                answer="部分结论 [chunk-1]",
+                confidence="high",
+                citations=[{"chunk_id": "chunk-1", "document_id": "doc-1"}],
+            )
+        )
+    )
+    config = _config(llm, hits={hit.chunk_id: hit.__dict__})
+    state = _state(
+        stop_reason="low_relevance",
+        findings=["第 3 页提到合规风险"],
+        used_chunk_ids=["chunk-1"],
+    )
+
+    result = await nodes.final_answer(state, config)
+
+    assert result["final_answer"] != nodes.LOW_RELEVANCE_ANSWER
+    assert "部分结论" in result["final_answer"]
+    assert result["confidence"] == "low"
+
+
+async def test_final_answer_removes_unverifiable_markers():
+    hit = ServiceHit(chunk_id="chunk-1", document_id="doc-1", content="合规风险", score=0.9)
+    llm = FakeLLM(
+        _result(
+            FinalAnswerOutput(
+                answer="结论 [fake] 与 [chunk-1]",
+                confidence="high",
+                citations=[{"chunk_id": "chunk-1", "document_id": "doc-1"}],
+            )
+        )
+    )
+    config = _config(llm, hits={hit.chunk_id: hit.__dict__})
+
+    result = await nodes.final_answer(
+        _state(stop_reason="sufficient", used_chunk_ids=["chunk-1"]), config
+    )
+
+    assert "[fake]" not in result["final_answer"]
+    assert "[chunk-1]" in result["final_answer"]
+    assert result["confidence"] == "low"
+    assert config["configurable"]["metrics"]["invalid_citation_marker_count"] == 1
+
+
+async def test_decide_next_step_records_score_and_missing_information():
+    llm = FakeLLM(
+        _result(
+            SufficiencyDecision(
+                is_sufficient=False,
+                missing_information="缺少风险等级",
+                new_queries=["风险等级"],
+                reason="证据不足",
+            )
+        )
+    )
+    result = await nodes.decide_next_step(_state(iteration=1, max_score=0.8), _config(llm))
+    record = result["iterations"][0]
+    assert record.max_score == 0.8
+    assert record.missing_information == "缺少风险等级"

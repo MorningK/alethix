@@ -58,5 +58,5 @@ def resolve_stop_reason(
 
 
 def route_after_decide(state: AgentState) -> Route:
-    """决定继续规划下一轮还是进入终答节点。"""
-    return "final_answer" if resolve_stop_reason(state) else "plan_queries"
+    """依据 decide_next_step 已记录的 stop_reason 决定路由。"""
+    return "final_answer" if state.get("stop_reason") else "plan_queries"

@@ -224,14 +224,14 @@ async def _persist(
                     queries=list(item.queries),
                     retrieved_chunk_count=int(item.retrieved_chunk_count),
                     new_chunk_count=int(item.new_chunk_count),
-                    max_score=max_score if index == 0 and max_score is not None else None,
+                    max_score=item.max_score,
                     findings=list(item.findings),
                     conflicts=list(item.conflicts),
                     decision=item.decision,
                     reason=item.reason or None,
-                    missing_information=item.reason if item.decision == "continue" else None,
+                    missing_information=item.missing_information,
                 )
-                for index, item in enumerate(iterations)
+                for item in iterations
             ]
         else:
             iteration_rows = [
@@ -308,15 +308,16 @@ async def run_single_ask(
         logger.warning("问答范围校验失败", extra=safe_extra(reason=type(exc).__name__))
         raise ApiError(ERR_INTERNAL, "问答范围校验失败", status=500) from exc
 
-    acquired: bool | None = None
+    lock_token: str | None = None
+    lock_degraded = False
     try:
-        acquired = await redis_db.acquire_session_lock(
+        lock_token = await redis_db.acquire_session_lock(
             str(chat_session.id), s.agent_session_lock_ttl_seconds
         )
     except Exception:  # noqa: BLE001
         # Redis 不可用时降级到 _persist 中的 PostgreSQL 行锁，不阻断问答。
-        acquired = None
-    if acquired is False:
+        lock_degraded = True
+    if not lock_degraded and lock_token is None:
         raise ApiError(ERR_SESSION_BUSY, "该会话正在处理上一个问题", status=409)
 
     try:
@@ -374,7 +375,7 @@ async def run_single_ask(
                         conflicts=list(item.conflicts),
                         decision=item.decision,  # type: ignore[arg-type]
                         reason=item.reason,
-                        missing_information=item.reason if item.decision == "continue" else None,
+                        missing_information=item.missing_information,
                     )
                     for item in research.iterations
                 ],
@@ -429,9 +430,9 @@ async def run_single_ask(
             citations=citations,
         )
     finally:
-        if acquired is True:
+        if lock_token:
             try:
-                await redis_db.release_session_lock(str(chat_session.id))
+                await redis_db.release_session_lock(str(chat_session.id), lock_token)
             except Exception:  # noqa: BLE001
                 pass
 

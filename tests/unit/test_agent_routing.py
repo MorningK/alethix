@@ -58,6 +58,16 @@ def test_continue_to_next_round():
     assert route_after_decide(_state()) == "plan_queries"
 
 
+def test_route_uses_recorded_stop_reason_only():
+    state = _state(stop_reason="sufficient", is_sufficient=False)
+    assert route_after_decide(state) == "final_answer"
+
+
+def test_route_does_not_recompute_budget():
+    state = _state(token_used=999999, token_budget=1)
+    assert route_after_decide(state) == "plan_queries"
+
+
 def test_settings_fallback(monkeypatch):
     monkeypatch.setattr(
         "app.agents.routing.get_settings",

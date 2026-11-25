@@ -338,6 +338,8 @@ async def invoke_structured(
             continue
 
         p_tokens, c_tokens = _usage(response)
+        if not p_tokens:
+            p_tokens = _estimate_tokens(_messages_text(current_messages))
         prompt_tokens += p_tokens
         completion_tokens += c_tokens
 

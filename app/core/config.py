@@ -80,7 +80,7 @@ class Settings(BaseSettings):
     agent_timeout_seconds: int = 120
     agent_no_new_evidence_rounds: int = 1
     agent_embedding_cache_ttl_seconds: int = 86400
-    agent_session_lock_ttl_seconds: int = 120
+    agent_session_lock_ttl_seconds: int = 180
 
     # ---------------- 文档处理 ----------------
     doc_max_file_size_mb: int = 50

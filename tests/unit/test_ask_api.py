@@ -19,7 +19,7 @@ from app.db.postgres import get_session
 from app.main import app
 from app.models.session import Session
 from app.schemas.ask import AskRequest, AskResponse
-from app.services import ask_service, retrieval_service
+from app.services import agent_service, ask_service, retrieval_service
 
 USER_ID = "9f2c1a8e-3b4d-4f6a-8c21-0e5d7a9b1c34"
 SESSION_ID = "7d4e5f60-8a9b-4c1d-2e3f-4a5b6c7d8e9f"
@@ -129,11 +129,11 @@ async def test_run_single_ask_maps_vector_error(monkeypatch):
     async def _scope(*, payload, user_id, db):
         return SimpleNamespace(id=SESSION_ID, default_document_ids=[]), [SESSION_ID], {}
 
-    async def _search(**kwargs):
+    async def _research(**kwargs):
         raise ApiError(ERR_VECTORDB_UNAVAILABLE, "向量检索不可用", status=503)
 
     monkeypatch.setattr(ask_service, "_resolve_scope", _scope)
-    monkeypatch.setattr(retrieval_service, "search", _search)
+    monkeypatch.setattr(agent_service, "run_research", _research)
 
     with pytest.raises(ApiError) as exc:
         await ask_service.run_single_ask(

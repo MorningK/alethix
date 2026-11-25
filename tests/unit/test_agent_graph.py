@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 from langgraph.checkpoint.memory import InMemorySaver
 
-from app.agents import runtime
+from app.agents import nodes, runtime
 from app.agents.graph import build_graph
 from app.agents.schemas import (
     AnalyzeEvidenceOutput,
@@ -182,3 +182,39 @@ async def test_single_iteration_cap():
     )
     assert result["stop_reason"] == "max_iterations_reached"
     assert len(result["iterations"]) == 1
+
+
+async def test_later_low_relevance_does_not_discard_earlier_evidence():
+    call_count = 0
+
+    async def _high_then_low(**kwargs) -> list[ServiceHit]:
+        nonlocal call_count
+        call_count += 1
+        score = 0.8 if call_count == 1 else 0.1
+        return [
+            ServiceHit(
+                chunk_id="chunk-1",
+                document_id="doc-1",
+                content="文档明确提到合规风险。",
+                score=score,
+                title="报告.pdf",
+            )
+        ]
+
+    insufficient = SufficiencyDecision(
+        is_sufficient=False, missing_information="继续查", new_queries=["补充查询"], reason="不足"
+    )
+    result = await _run(
+        decisions=[insufficient],
+        analyses=[
+            AnalyzeEvidenceOutput(
+                findings=["首次发现"], used_chunk_ids=["chunk-1"], conflicts=[], reasoning=""
+            )
+        ],
+        retrieve=_high_then_low,
+        max_iterations=3,
+    )
+
+    assert result["stop_reason"] == "low_relevance"
+    assert result["final_answer"] != nodes.LOW_RELEVANCE_ANSWER
+    assert "[chunk-1]" in result["final_answer"]

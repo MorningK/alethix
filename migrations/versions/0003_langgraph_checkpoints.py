@@ -80,9 +80,9 @@ def upgrade() -> None:
     op.execute(
         "CREATE INDEX IF NOT EXISTS checkpoint_writes_thread_id_idx ON checkpoint_writes(thread_id)"
     )
-    # langgraph-checkpoint-postgres 3.0.5 的 MIGRATIONS 共 10 项；写入终态版本号，
-    # 避免运行时 setup() 在事务内执行 CREATE INDEX CONCURRENTLY。
-    for version in range(1, 11):
+    # langgraph-checkpoint-postgres 3.0.5 的 MIGRATIONS 索引为 0~9；写入终态版本号，
+    # 避免运行时 setup() 在事务内执行 CREATE INDEX CONCURRENTLY，也避免跳过未来的版本 10。
+    for version in range(10):
         op.execute(f"INSERT INTO checkpoint_migrations (v) VALUES ({version}) ON CONFLICT DO NOTHING")
 
 

@@ -50,6 +50,8 @@ _DEFAULT_CONFIDENCE: dict[str, str] = {
 }
 
 _WHITESPACE = re.compile(r"\s+")
+_CITATION_MARKER = re.compile(r"\[([^\[\]\n]+)\]")
+_INVALID_MARKER_NOTICE = "已移除无法核验的引用标记。"
 
 
 def _normalize_query(value: str) -> str:
@@ -60,6 +62,20 @@ def _dedupe(values: list[str]) -> list[str]:
     return list(
         dict.fromkeys(value for value in values if isinstance(value, str) and value.strip())
     )
+
+
+def _sanitize_answer_markers(answer: str, valid_ids: set[str]) -> tuple[str, list[str]]:
+    """移除答案中无法核验的 [chunk_id] 标记。"""
+    invalid: list[str] = []
+
+    def _replace(match: re.Match[str]) -> str:
+        marker = match.group(1).strip()
+        if marker in valid_ids:
+            return match.group(0)
+        invalid.append(marker)
+        return ""
+
+    return _CITATION_MARKER.sub(_replace, answer), invalid
 
 
 def _account(
@@ -343,6 +359,8 @@ async def decide_next_step(state: AgentState, config: RunnableConfig) -> dict:
         conflicts=list(metrics.get("last_conflicts") or []),
         decision="answer" if stop_reason else "continue",
         reason=reason,
+        max_score=float(state.get("max_score", 0.0)),
+        missing_information=missing_information or None,
     )
 
     return {
@@ -383,7 +401,8 @@ async def final_answer(state: AgentState, config: RunnableConfig) -> dict:
     hit_by_id = {hit.chunk_id: hit for hit in hits}
     whitelist = set(state.get("used_chunk_ids") or [])
 
-    if stop_reason == "low_relevance":
+    has_accumulated_evidence = bool(state.get("findings") or state.get("used_chunk_ids"))
+    if stop_reason == "low_relevance" and not has_accumulated_evidence:
         citations, _ = deps.build_citations(
             hits[:3], metrics.get("filename_map") or {}, [], settings=settings
         )
@@ -406,6 +425,12 @@ async def final_answer(state: AgentState, config: RunnableConfig) -> dict:
         }
 
     evidence_hits = [hit for hit in hits if hit.chunk_id in whitelist]
+    guidance = runtime.stop_reason_guidance(stop_reason)
+    if stop_reason == "low_relevance":
+        guidance = (
+            "注意：最新一轮检索相关度不足，已停止继续检索；"
+            "请基于已收集证据给出部分结论，并明确说明仍存在的信息缺口。"
+        )
     result = await deps.call_structured(
         FinalAnswerOutput,
         messages=[
@@ -415,7 +440,7 @@ async def final_answer(state: AgentState, config: RunnableConfig) -> dict:
                     question=state["question"],
                     findings=list(state.get("findings") or []),
                     evidence_context=_citation_context(evidence_hits, settings),
-                    stop_reason_guidance=runtime.stop_reason_guidance(stop_reason),
+                    stop_reason_guidance=guidance,
                 ),
             )
         ],
@@ -443,7 +468,14 @@ async def final_answer(state: AgentState, config: RunnableConfig) -> dict:
         if payload and payload.answer.strip()
         else ("基于当前已检索到的内容，暂时无法形成可靠结论。")
     )
+    answer, invalid_markers = _sanitize_answer_markers(answer, set(valid_ids))
+    if invalid_markers:
+        metrics["invalid_citation_marker_count"] = len(invalid_markers)
+        answer = f"{answer.rstrip()}\n\n{_INVALID_MARKER_NOTICE}"
+
     confidence = str(payload.confidence) if payload else _DEFAULT_CONFIDENCE.get(stop_reason, "low")
+    if stop_reason == "low_relevance" or invalid_markers:
+        confidence = "low"
     if not citations:
         confidence = "low"
         answer = f"{answer}\n\n{_NO_EVIDENCE_NOTICE}"

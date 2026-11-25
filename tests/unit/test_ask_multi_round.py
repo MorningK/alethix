@@ -50,6 +50,8 @@ def _research(**overrides) -> ResearchResult:
                 conflicts=[],
                 decision="answer",
                 reason="证据充分",
+                max_score=0.8,
+                missing_information=None,
             )
         ],
         citations=[
@@ -83,9 +85,12 @@ def patched(monkeypatch):
         )
 
     async def _lock(*args, **kwargs):
-        return True
+        return "owner-token"
+
+    released: list[tuple] = []
 
     async def _unlock(*args, **kwargs):
+        released.append(args)
         return None
 
     async def _persist(**kwargs):
@@ -123,7 +128,7 @@ async def test_run_single_ask_returns_multi_round_result(patched):
 
 async def test_session_busy_returns_conflict(patched):
     async def _busy(*args, **kwargs):
-        return False
+        return None
 
     patched.setattr(redis_db, "acquire_session_lock", _busy)
     with pytest.raises(ApiError) as exc:
@@ -134,3 +139,32 @@ async def test_session_busy_returns_conflict(patched):
         )
     assert exc.value.code == ERR_SESSION_BUSY
     assert exc.value.status == 409
+
+
+async def test_session_lock_released_with_owner_token(monkeypatch):
+    async def _scope(*, payload, user_id, db):
+        return SimpleNamespace(id=SESSION_ID, default_document_ids=[]), [], {}
+
+    async def _acquire(*args, **kwargs):
+        return "owner-token-123"
+
+    released: dict = {}
+
+    async def _release(session_id, token):
+        released.update(session_id=session_id, token=token)
+
+    async def _persist(**kwargs):
+        return RUN_ID
+
+    monkeypatch.setattr(ask_service, "_resolve_scope", _scope)
+    monkeypatch.setattr(redis_db, "acquire_session_lock", _acquire)
+    monkeypatch.setattr(redis_db, "release_session_lock", _release)
+    monkeypatch.setattr(ask_service, "_persist", _persist)
+
+    await ask_service.run_single_ask(
+        payload=AskRequest(session_id=SESSION_ID, question="风险？", document_ids=[]),
+        user_id=USER_ID,
+        db=DummyDb(),
+    )
+
+    assert released == {"session_id": SESSION_ID, "token": "owner-token-123"}

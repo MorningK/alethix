@@ -35,6 +35,15 @@ def get_embeddings() -> OpenAIEmbeddings:
     return build_embeddings(get_settings())
 
 
+def _query_cache_key(text: str, settings: Settings) -> str:
+    return redis_db.key_embedding_cache(
+        text,
+        embedding_model=settings.embedding_model,
+        embedding_base_url=settings.resolved_embedding_base_url,
+        embedding_dim=settings.embedding_dim,
+    )
+
+
 async def embed_texts(
     texts: Sequence[str],
     settings: Settings | None = None,
@@ -57,10 +66,10 @@ async def embed_texts(
             client = redis_db.get_redis()
             remaining: list[tuple[int, str]] = []
             for index, text in pending:
-                raw = await client.get(redis_db.key_embedding_cache(text))
+                raw = await client.get(_query_cache_key(text, s))
                 if raw:
                     vector = json.loads(raw)
-                    if isinstance(vector, list):
+                    if isinstance(vector, list) and vector:
                         cached[index] = [float(value) for value in vector]
                         continue
                 remaining.append((index, text))
@@ -82,7 +91,7 @@ async def embed_texts(
             if cache:
                 try:
                     await redis_db.get_redis().set(
-                        redis_db.key_embedding_cache(texts[index]),
+                        _query_cache_key(texts[index], s),
                         json.dumps(resolved),
                         ex=s.agent_embedding_cache_ttl_seconds,
                     )

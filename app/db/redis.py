@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from collections.abc import Sequence
 from typing import Any
 
@@ -68,10 +69,17 @@ def key_doc_lock(document_id: str) -> str:
     return f"doc:lock:{document_id}"
 
 
-def key_embedding_cache(query: str) -> str:
+def key_embedding_cache(
+    query: str,
+    *,
+    embedding_model: str,
+    embedding_base_url: str,
+    embedding_dim: int,
+) -> str:
     import hashlib
 
-    return f"emb:q:{hashlib.sha256(query.encode('utf-8')).hexdigest()}"
+    identity = f"{embedding_model}|{embedding_base_url}|{embedding_dim}|{query}"
+    return f"emb:q:{hashlib.sha256(identity.encode('utf-8')).hexdigest()}"
 
 
 def key_rate_limit(scope: str, user_id: str, minute: int) -> str:
@@ -160,13 +168,27 @@ async def release_doc_lock(document_id: str) -> None:
     await get_redis().delete(key_doc_lock(document_id))
 
 
-async def acquire_session_lock(session_id: str, ttl_seconds: int = 120) -> bool:
-    """获取同一会话的问答互斥锁；已被持有返回 False。"""
-    return bool(await get_redis().set(key_session_lock(session_id), "1", nx=True, ex=ttl_seconds))
+_SESSION_LOCK_RELEASE_SCRIPT = """
+if redis.call('get', KEYS[1]) == ARGV[1] then
+    return redis.call('del', KEYS[1])
+end
+return 0
+"""
 
 
-async def release_session_lock(session_id: str) -> None:
-    await get_redis().delete(key_session_lock(session_id))
+async def acquire_session_lock(session_id: str, ttl_seconds: int = 180) -> str | None:
+    """获取会话锁；成功返回 owner token，已被持有返回 None。"""
+    token = str(uuid.uuid4())
+    acquired = await get_redis().set(key_session_lock(session_id), token, nx=True, ex=ttl_seconds)
+    return token if acquired else None
+
+
+async def release_session_lock(session_id: str, token: str) -> bool:
+    """仅释放本请求持有的锁，避免误删后续请求的租约。"""
+    released = await get_redis().eval(
+        _SESSION_LOCK_RELEASE_SCRIPT, 1, key_session_lock(session_id), token
+    )
+    return bool(released)
 
 
 async def next_retry_count(document_id: str, ttl_seconds: int = 86400) -> int:

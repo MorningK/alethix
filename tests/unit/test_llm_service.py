@@ -183,3 +183,26 @@ def test_parse_json_logs_validation_error(caplog):
     assert record.attempt == 2
     assert record.schema == "SufficiencyDecision"
     assert "missing_information" in record.errors
+
+
+async def test_invoke_structured_estimates_missing_prompt_tokens(monkeypatch):
+    class LLM:
+        async def ainvoke(self, messages):
+            return FakeResponse(
+                '{"queries": ["风险"]}',
+                usage={"input_tokens": 0, "output_tokens": 2},
+            )
+
+    monkeypatch.setattr(llm_service, "build_llm", lambda *a, **k: LLM())
+    monkeypatch.setattr(llm_service, "build_fallback_llm", lambda *a, **k: LLM())
+
+    result = await llm_service.invoke_structured(
+        PlanQueriesOutput,
+        messages=[("system", "你是助手"), ("user", "生成查询")],
+        settings=_settings(),
+        node="plan_queries",
+    )
+
+    assert isinstance(result.payload, PlanQueriesOutput)
+    assert result.prompt_tokens > 0
+    assert result.token_used > 2

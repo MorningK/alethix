@@ -23,8 +23,10 @@ from app.agents.nodes import (
 )
 from app.agents.routing import route_after_decide
 from app.agents.state import AgentState
+from app.core.config import get_settings
 
 _graph: Any | None = None
+_graph_checkpointer: Any | None = None
 
 
 def build_graph(*, checkpointer: Any | None = None) -> Any:
@@ -53,23 +55,30 @@ def build_graph(*, checkpointer: Any | None = None) -> Any:
     )
 
 
+def _resolve_checkpointer() -> Any:
+    try:
+        return runtime.get_checkpointer()
+    except RuntimeError:
+        if get_settings().app_env == "test":
+            return InMemorySaver()
+        raise RuntimeError("LangGraph checkpointer 未初始化，无法执行多轮调研")
+
+
 def get_graph() -> Any:
-    """获取编译后的图单例。"""
-    global _graph
-    if _graph is None:
-        try:
-            checkpointer = runtime.get_checkpointer()
-        except RuntimeError:
-            # 未走应用 lifespan 的场景（脚本 / 单测）使用内存检查点兜底。
-            checkpointer = InMemorySaver()
+    """获取编译后的图单例；检查点变化时自动重建。"""
+    global _graph, _graph_checkpointer
+    checkpointer = _resolve_checkpointer()
+    if _graph is None or _graph_checkpointer is not checkpointer:
         _graph = build_graph(checkpointer=checkpointer)
+        _graph_checkpointer = checkpointer
     return _graph
 
 
 def reset_graph() -> None:
     """重置图单例，供测试切换 checkpointer 使用。"""
-    global _graph
+    global _graph, _graph_checkpointer
     _graph = None
+    _graph_checkpointer = None
 
 
 __all__ = ["build_graph", "get_graph", "reset_graph"]
