@@ -170,15 +170,34 @@ async def run_research(
     )
     started_at = state["started_at"]
 
+    graph = get_graph()
     try:
         final_state = await asyncio.wait_for(
-            get_graph().ainvoke(state, config=config), timeout=s.agent_timeout_seconds
+            graph.ainvoke(state, config=config), timeout=s.agent_timeout_seconds
         )
     except TimeoutError:
         logger.warning(
-            "多轮调研硬超时，返回保守收尾结果", extra=safe_extra(agent_run_id=agent_run_id)
+            "多轮调研硬超时，尝试从检查点恢复已完成状态",
+            extra=safe_extra(agent_run_id=agent_run_id),
         )
-        final_state = _timeout_state(state)
+        timeout_base: dict = dict(state)
+        try:
+            snapshot = await graph.aget_state({"configurable": {"thread_id": agent_run_id}})
+            if snapshot.values:
+                timeout_base = dict(snapshot.values)
+                logger.warning(
+                    "已从检查点恢复超时前状态",
+                    extra=safe_extra(
+                        agent_run_id=agent_run_id,
+                        iterations=len(snapshot.values.get("iterations") or []),
+                    ),
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "超时后读取检查点失败，回退到输入状态",
+                extra=safe_extra(agent_run_id=agent_run_id, reason=type(exc).__name__),
+            )
+        final_state = _timeout_state(timeout_base)  # type: ignore[arg-type]
     except ApiError:
         raise
     except Exception as exc:  # noqa: BLE001

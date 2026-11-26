@@ -50,7 +50,11 @@ _DEFAULT_CONFIDENCE: dict[str, str] = {
 }
 
 _WHITESPACE = re.compile(r"\s+")
-_CITATION_MARKER = re.compile(r"\[([^\[\]\n]+)\]")
+_BRACKETED_TEXT = re.compile(r"\[([^\[\]\n]+)\]")
+_UUID_CITATION = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
 _INVALID_MARKER_NOTICE = "已移除无法核验的引用标记。"
 
 
@@ -65,17 +69,20 @@ def _dedupe(values: list[str]) -> list[str]:
 
 
 def _sanitize_answer_markers(answer: str, valid_ids: set[str]) -> tuple[str, list[str]]:
-    """移除答案中无法核验的 [chunk_id] 标记。"""
+    """只移除 UUID 形状且不在白名单中的引用标记，保留普通方括号文本。"""
     invalid: list[str] = []
+    allowed = {item.casefold() for item in valid_ids}
 
     def _replace(match: re.Match[str]) -> str:
         marker = match.group(1).strip()
-        if marker in valid_ids:
+        if not _UUID_CITATION.fullmatch(marker):
+            return match.group(0)
+        if marker.casefold() in allowed:
             return match.group(0)
         invalid.append(marker)
         return ""
 
-    return _CITATION_MARKER.sub(_replace, answer), invalid
+    return _BRACKETED_TEXT.sub(_replace, answer), invalid
 
 
 def _account(

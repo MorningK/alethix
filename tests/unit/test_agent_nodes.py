@@ -321,27 +321,52 @@ async def test_final_answer_keeps_partial_answer_when_evidence_exists():
     assert result["confidence"] == "low"
 
 
-async def test_final_answer_removes_unverifiable_markers():
-    hit = ServiceHit(chunk_id="chunk-1", document_id="doc-1", content="合规风险", score=0.9)
+async def test_final_answer_removes_unverifiable_uuid_markers():
+    valid_id = "751f4bd8-05fc-47ee-b515-74d4d6615777"
+    invalid_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    hit = ServiceHit(chunk_id=valid_id, document_id="doc-1", content="合规风险", score=0.9)
     llm = FakeLLM(
         _result(
             FinalAnswerOutput(
-                answer="结论 [fake] 与 [chunk-1]",
+                answer=f"结论 [{invalid_id}] 与 [{valid_id}]",
                 confidence="high",
-                citations=[{"chunk_id": "chunk-1", "document_id": "doc-1"}],
+                citations=[{"chunk_id": valid_id, "document_id": "doc-1"}],
             )
         )
     )
     config = _config(llm, hits={hit.chunk_id: hit.__dict__})
 
     result = await nodes.final_answer(
-        _state(stop_reason="sufficient", used_chunk_ids=["chunk-1"]), config
+        _state(stop_reason="sufficient", used_chunk_ids=[valid_id]), config
     )
 
-    assert "[fake]" not in result["final_answer"]
-    assert "[chunk-1]" in result["final_answer"]
+    assert invalid_id not in result["final_answer"]
+    assert valid_id in result["final_answer"]
     assert result["confidence"] == "low"
     assert config["configurable"]["metrics"]["invalid_citation_marker_count"] == 1
+
+
+async def test_final_answer_preserves_ordinary_bracketed_text():
+    valid_id = "751f4bd8-05fc-47ee-b515-74d4d6615777"
+    hit = ServiceHit(chunk_id=valid_id, document_id="doc-1", content="合规风险", score=0.9)
+    llm = FakeLLM(
+        _result(
+            FinalAnswerOutput(
+                answer=f"范围为 [0, 1]。[{valid_id}]",
+                confidence="high",
+                citations=[{"chunk_id": valid_id, "document_id": "doc-1"}],
+            )
+        )
+    )
+    config = _config(llm, hits={hit.chunk_id: hit.__dict__})
+
+    result = await nodes.final_answer(
+        _state(stop_reason="sufficient", used_chunk_ids=[valid_id]), config
+    )
+
+    assert "[0, 1]" in result["final_answer"]
+    assert result["confidence"] == "high"
+    assert "invalid_citation_marker_count" not in config["configurable"]["metrics"]
 
 
 async def test_decide_next_step_records_score_and_missing_information():

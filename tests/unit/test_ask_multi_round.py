@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.agents.state import IterationRecord as StateIteration
+from app.core.config import Settings
 from app.core.errors import ERR_SESSION_BUSY, ApiError
 from app.db import redis as redis_db
 from app.schemas.ask import AskRequest
@@ -168,3 +169,39 @@ async def test_session_lock_released_with_owner_token(monkeypatch):
     )
 
     assert released == {"session_id": SESSION_ID, "token": "owner-token-123"}
+
+
+async def test_session_lock_ttl_is_clamped_to_run_duration(monkeypatch):
+    captured: dict = {}
+
+    async def _scope(*, payload, user_id, db):
+        return SimpleNamespace(id=SESSION_ID, default_document_ids=[]), [], {}
+
+    async def _acquire(session_id, ttl):
+        captured["ttl"] = ttl
+        return "owner-token"
+
+    async def _release(session_id, token):
+        return None
+
+    async def _persist(**kwargs):
+        return RUN_ID
+
+    monkeypatch.setattr(ask_service, "_resolve_scope", _scope)
+    monkeypatch.setattr(redis_db, "acquire_session_lock", _acquire)
+    monkeypatch.setattr(redis_db, "release_session_lock", _release)
+    monkeypatch.setattr(ask_service, "_persist", _persist)
+
+    settings = Settings(
+        _env_file=None,
+        agent_timeout_seconds=120,
+        agent_session_lock_ttl_seconds=10,
+    )
+    await ask_service.run_single_ask(
+        payload=AskRequest(session_id=SESSION_ID, question="风险？", document_ids=[]),
+        user_id=USER_ID,
+        db=DummyDb(),
+        settings=settings,
+    )
+
+    assert captured["ttl"] >= 150

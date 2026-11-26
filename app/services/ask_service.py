@@ -39,6 +39,8 @@ from app.services import agent_service, answer_service, citation_service, retrie
 
 logger = get_logger(__name__)
 
+_SESSION_LOCK_PERSISTENCE_BUFFER_SECONDS = 30
+
 
 def _validate_payload(payload: AskRequest) -> None:
     question = payload.question or ""
@@ -308,12 +310,20 @@ async def run_single_ask(
         logger.warning("问答范围校验失败", extra=safe_extra(reason=type(exc).__name__))
         raise ApiError(ERR_INTERNAL, "问答范围校验失败", status=500) from exc
 
+    lock_ttl = max(
+        s.agent_session_lock_ttl_seconds,
+        s.agent_timeout_seconds + _SESSION_LOCK_PERSISTENCE_BUFFER_SECONDS,
+    )
+    if lock_ttl > s.agent_session_lock_ttl_seconds:
+        logger.warning(
+            "会话锁 TTL 已上调以覆盖完整调研",
+            extra=safe_extra(configured=s.agent_session_lock_ttl_seconds, effective=lock_ttl),
+        )
+
     lock_token: str | None = None
     lock_degraded = False
     try:
-        lock_token = await redis_db.acquire_session_lock(
-            str(chat_session.id), s.agent_session_lock_ttl_seconds
-        )
+        lock_token = await redis_db.acquire_session_lock(str(chat_session.id), lock_ttl)
     except Exception:  # noqa: BLE001
         # Redis 不可用时降级到 _persist 中的 PostgreSQL 行锁，不阻断问答。
         lock_degraded = True
