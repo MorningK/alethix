@@ -7,11 +7,12 @@ Redis 不可用时回落到进程内存，保证测试与单机降级场景可�
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import Sequence
 from typing import Any, Protocol
 
 from app.core.config import Settings, get_settings
-from app.core.logging import get_logger
+from app.core.logging import get_logger, safe_extra
 from app.db import redis as redis_db
 
 logger = get_logger(__name__)
@@ -32,15 +33,27 @@ class SSEEventStore(Protocol):
 class InMemorySSEEventStore:
     """测试环境使用的内存事件存储。"""
 
-    def __init__(self, max_events: int = 100) -> None:
+    def __init__(self, max_events: int = 100, ttl_seconds: int = 3600) -> None:
         self._max_events = max_events
+        self._ttl = ttl_seconds
         self._events: dict[str, list[EventRecord]] = {}
         self._sequence: dict[str, int] = {}
+        self._expires: dict[str, float] = {}
+
+    def _purge_expired(self) -> None:
+        now = time.monotonic()
+        expired = [run_id for run_id, deadline in self._expires.items() if deadline <= now]
+        for run_id in expired:
+            self._events.pop(run_id, None)
+            self._sequence.pop(run_id, None)
+            self._expires.pop(run_id, None)
 
     async def append(self, agent_run_id: str, event: str, data: dict[str, Any]) -> EventRecord:
+        self._purge_expired()
         events = self._events.setdefault(agent_run_id, [])
         event_id = self._sequence.get(agent_run_id, 0) + 1
         self._sequence[agent_run_id] = event_id
+        self._expires[agent_run_id] = time.monotonic() + self._ttl
         record: EventRecord = {
             "id": event_id,
             "event": event,
@@ -51,11 +64,13 @@ class InMemorySSEEventStore:
         return dict(record)
 
     async def after(self, agent_run_id: str, event_id: int) -> list[EventRecord]:
+        self._purge_expired()
         return [dict(item) for item in self._events.get(agent_run_id, []) if item["id"] > event_id]
 
     async def clear(self, agent_run_id: str) -> None:
         self._events.pop(agent_run_id, None)
         self._sequence.pop(agent_run_id, None)
+        self._expires.pop(agent_run_id, None)
 
 
 class RedisSSEEventStore:
@@ -102,6 +117,52 @@ class RedisSSEEventStore:
         )
 
 
+class ResilientSSEEventStore:
+    """Redis 故障时回退到进程内存；降级期间跨 worker 重放不可用。"""
+
+    def __init__(self, *, primary: SSEEventStore, fallback: SSEEventStore) -> None:
+        self._primary = primary
+        self._fallback = fallback
+        self._degraded = False
+
+    @property
+    def degraded(self) -> bool:
+        return self._degraded
+
+    def _degrade(self, operation: str, exc: Exception) -> None:
+        if not self._degraded:
+            logger.warning(
+                "SSE 事件存储降级到进程内存",
+                extra=safe_extra(operation=operation, reason=type(exc).__name__),
+            )
+        self._degraded = True
+
+    async def append(self, agent_run_id: str, event: str, data: dict[str, Any]) -> EventRecord:
+        if not self._degraded:
+            try:
+                return await self._primary.append(agent_run_id, event, data)
+            except Exception as exc:  # noqa: BLE001
+                self._degrade("append", exc)
+        return await self._fallback.append(agent_run_id, event, data)
+
+    async def after(self, agent_run_id: str, event_id: int) -> list[EventRecord]:
+        if not self._degraded:
+            try:
+                return await self._primary.after(agent_run_id, event_id)
+            except Exception as exc:  # noqa: BLE001
+                self._degrade("after", exc)
+        return await self._fallback.after(agent_run_id, event_id)
+
+    async def clear(self, agent_run_id: str) -> None:
+        if not self._degraded:
+            try:
+                await self._primary.clear(agent_run_id)
+                return
+            except Exception as exc:  # noqa: BLE001
+                self._degrade("clear", exc)
+        await self._fallback.clear(agent_run_id)
+
+
 _store: SSEEventStore | None = None
 
 
@@ -112,10 +173,17 @@ def get_event_store(settings: Settings | None = None) -> SSEEventStore:
         return _store
     s = settings or get_settings()
     if s.app_env == "test" or not redis_db.client_state()["initialized"]:
-        _store = InMemorySSEEventStore(max_events=s.sse_max_events)
+        _store = InMemorySSEEventStore(
+            max_events=s.sse_max_events, ttl_seconds=s.sse_event_ttl_seconds
+        )
     else:
-        _store = RedisSSEEventStore(
-            ttl_seconds=s.sse_event_ttl_seconds, max_events=s.sse_max_events
+        _store = ResilientSSEEventStore(
+            primary=RedisSSEEventStore(
+                ttl_seconds=s.sse_event_ttl_seconds, max_events=s.sse_max_events
+            ),
+            fallback=InMemorySSEEventStore(
+                max_events=s.sse_max_events, ttl_seconds=s.sse_event_ttl_seconds
+            ),
         )
     return _store
 
@@ -136,6 +204,7 @@ __all__ = [
     "EventRecord",
     "InMemorySSEEventStore",
     "RedisSSEEventStore",
+    "ResilientSSEEventStore",
     "SSEEventStore",
     "format_event",
     "get_event_store",

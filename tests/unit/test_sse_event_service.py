@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from app.services.sse_event_service import InMemorySSEEventStore, format_event
+from app.services.sse_event_service import (
+    InMemorySSEEventStore,
+    ResilientSSEEventStore,
+    format_event,
+)
 
 
 async def test_memory_store_assigns_monotonic_ids_and_replays_after_cursor():
@@ -30,6 +34,39 @@ async def test_memory_store_trims_to_last_100_events():
 async def test_memory_store_clear_removes_all_events():
     store = InMemorySSEEventStore()
     await store.append("run-1", "started", {})
+    await store.clear("run-1")
+    assert await store.after("run-1", 0) == []
+
+
+async def test_memory_store_expires_after_ttl():
+    store = InMemorySSEEventStore(max_events=100, ttl_seconds=0)
+    await store.append("run-1", "started", {})
+    assert await store.after("run-1", 0) == []
+    assert "run-1" not in store._events
+    assert "run-1" not in store._sequence
+
+
+class BrokenStore:
+    async def append(self, agent_run_id, event, data):
+        raise RuntimeError("redis down")
+
+    async def after(self, agent_run_id, event_id):
+        raise RuntimeError("redis down")
+
+    async def clear(self, agent_run_id):
+        raise RuntimeError("redis down")
+
+
+async def test_resilient_store_falls_back_on_redis_failure():
+    store = ResilientSSEEventStore(
+        primary=BrokenStore(), fallback=InMemorySSEEventStore(max_events=100)
+    )
+
+    record = await store.append("run-1", "started", {})
+    assert record["id"] == 1
+    assert store.degraded is True
+    assert [item["event"] for item in await store.after("run-1", 0)] == ["started"]
+
     await store.clear("run-1")
     assert await store.after("run-1", 0) == []
 

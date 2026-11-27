@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
 import { Alert, Button, Card, Tag, Typography } from 'antd';
 import { useParams } from 'react-router-dom';
 import { ChatComposer } from '@/components/chat/ChatComposer';
@@ -8,12 +7,12 @@ import { ResearchChain } from '@/components/chat/ResearchChain';
 import { useAskStream } from '@/hooks/useAskStream';
 import { useSessionMessages } from '@/hooks/useSession';
 import { useAppStore } from '@/store/useAppStore';
+import type { FinalAnswerEvent } from '@/types/sse';
 import { toBubbleItems, toResearchChainItems } from '@/utils/chatAdapters';
 
 /** Ant Design X 问答调研页：对话气泡 + 调研思维链 + Sender。 */
 export function ChatPage() {
   const { sessionId } = useParams();
-  const queryClient = useQueryClient();
   const currentSessionId = useAppStore((state) => state.currentSessionId);
   const currentSession = useAppStore((state) => state.currentSession);
   const selectedDocIds = useAppStore((state) => state.selectedDocIds);
@@ -27,32 +26,53 @@ export function ChatPage() {
     ids: [],
   });
   const lastSessionRef = useRef<string | null | undefined>(undefined);
+  const activeSessionRef = useRef(activeSessionId);
+  const turnRef = useRef(0);
 
-  const { data: historyData } = useSessionMessages(activeSessionId);
+  const history = useSessionMessages(activeSessionId);
+  const historyRef = useRef(history);
   const timelineState = useAskStream();
-  const { start, stop, settle } = timelineState;
+  const { start, stop, settle, reset } = timelineState;
 
   useEffect(() => {
+    historyRef.current = history;
+  }, [history]);
+
+  useEffect(() => {
+    activeSessionRef.current = activeSessionId;
     const previousSessionId = lastSessionRef.current;
     lastSessionRef.current = activeSessionId;
     if (previousSessionId !== undefined && previousSessionId !== activeSessionId) {
-      stop();
+      reset();
     }
-  }, [activeSessionId, stop]);
+  }, [activeSessionId, reset]);
 
   const excludedDocIds = excluded.sessionId === activeSessionId ? excluded.ids : [];
   const scopeIds = allScopeIds.filter((id) => !excludedDocIds.includes(id));
 
-  const handleFinal = useCallback(async () => {
-    if (activeSessionId) {
-      await queryClient.invalidateQueries({ queryKey: ['messages', activeSessionId] });
-    }
-    settle();
-  }, [activeSessionId, queryClient, settle]);
+  const handleFinal = useCallback(
+    async (event: FinalAnswerEvent, turn: number) => {
+      if (activeSessionRef.current !== activeSessionId || turnRef.current !== turn) return;
+      try {
+        const refreshed = await historyRef.current.refetchHistory();
+        const persisted = refreshed.items.some(
+          (item) => item.role === 'assistant' && item.agent_run_id === event.agent_run_id,
+        );
+        if (persisted && activeSessionRef.current === activeSessionId && turnRef.current === turn) {
+          settle();
+        }
+      } catch (error) {
+        console.error('[chat] 历史刷新失败，保留当前答案', error);
+      }
+    },
+    [activeSessionId, settle],
+  );
 
   const handleSubmit = (question: string) => {
     if (!activeSessionId) return;
     setValue('');
+    turnRef.current += 1;
+    const turn = turnRef.current;
     start(
       {
         session_id: activeSessionId,
@@ -60,14 +80,14 @@ export function ChatPage() {
         document_ids: scopeIds,
         max_iterations: 3,
       },
-      handleFinal,
+      (event) => handleFinal(event, turn),
     );
   };
 
   const bubbleItems = useMemo(
     () =>
       toBubbleItems({
-        history: historyData?.items ?? [],
+        history: history.items,
         currentQuestion: timelineState.currentQuestion,
         running: timelineState.running,
         finalAnswer: timelineState.finalAnswer,
@@ -75,7 +95,7 @@ export function ChatPage() {
         aborted: timelineState.aborted,
       }),
     [
-      historyData?.items,
+      history.items,
       timelineState.currentQuestion,
       timelineState.running,
       timelineState.finalAnswer,
@@ -155,13 +175,33 @@ export function ChatPage() {
         <Alert
           type="warning"
           showIcon
-          message="调研已停止"
+          title="调研已停止"
           description="本次未生成完整答案，可重新提问继续调研。"
         />
       )}
 
       <div className="flex min-h-0 flex-1 gap-4">
         <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-slate-100 bg-white shadow-sm">
+          {history.isError && (
+            <Alert
+              type="warning"
+              showIcon
+              title="会话历史加载失败"
+              description="当前答案与调研过程仍可查看，稍后可刷新页面重试。"
+            />
+          )}
+          {history.hasOlder && (
+            <div className="shrink-0 border-b border-slate-100 px-4 py-2">
+              <Button
+                type="link"
+                size="small"
+                loading={history.loadingOlder}
+                onClick={history.loadOlder}
+              >
+                加载更早消息
+              </Button>
+            </div>
+          )}
           <div className="min-h-0 flex-1">
             <ChatMessageList items={bubbleItems} />
           </div>

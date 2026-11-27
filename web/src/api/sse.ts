@@ -34,16 +34,14 @@ export function askStream(payload: AskRequest, handlers: StreamHandlers): AbortC
     headers,
     body: JSON.stringify(payload),
     signal: controller.signal,
+    openWhenHidden: true,
 
     async onopen(response) {
       if (!response.ok) {
         fatal = response.status < 500;
         const text = await response.text().catch(() => '');
-        const message = `服务返回异常：${response.status} ${text}`;
-        handlers.onError?.(message, String(response.status));
-        throw new Error(message);
+        throw new Error(`服务返回异常：${response.status} ${text}`);
       }
-      retries = 0;
     },
 
     onmessage(message) {
@@ -51,8 +49,11 @@ export function askStream(payload: AskRequest, handlers: StreamHandlers): AbortC
         headers['Last-Event-ID'] = message.id;
       }
       if (!message.event || !message.data) return;
+      const parsed = JSON.parse(message.data) as Record<string, unknown>;
+      if (typeof parsed.agent_run_id === 'string' && parsed.agent_run_id) {
+        headers['X-Agent-Run-Id'] = parsed.agent_run_id;
+      }
       if (message.event === 'error') {
-        const parsed = JSON.parse(message.data) as Record<string, unknown>;
         handlers.onEvent({
           type: 'error',
           code: String(parsed.code ?? 'UNKNOWN'),
@@ -61,7 +62,6 @@ export function askStream(payload: AskRequest, handlers: StreamHandlers): AbortC
         } as ResearchEvent);
         return;
       }
-      const parsed = JSON.parse(message.data) as Record<string, unknown>;
       const eventId = Number(message.id);
       handlers.onEvent(
         { type: message.event, ...parsed } as ResearchEvent,

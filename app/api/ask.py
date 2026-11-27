@@ -16,16 +16,25 @@ from typing import Any
 
 from fastapi import APIRouter, Request, status
 from fastapi.responses import StreamingResponse
+from sqlalchemy import select
 
 from app.api.deps import CurrentUserId, DbSession, SettingsDep
-from app.core.errors import ERR_AGENT_FAILED, ApiError
+from app.core.errors import (
+    ERR_AGENT_FAILED,
+    ERR_SESSION_NOT_FOUND,
+    ERR_SESSION_PARAM,
+    ApiError,
+)
 from app.core.logging import get_logger, safe_extra, trace_id_var
+from app.models.agent import AgentRun
 from app.schemas.ask import AskRequest, AskResponse
 from app.services import agent_service, ask_service, sse_event_service
 from app.services.sse_event_service import EventRecord
 
 router = APIRouter(tags=["ask"])
 logger = get_logger(__name__)
+
+_TERMINAL_EVENTS = {"final_answer", "error"}
 
 
 def _last_event_id(value: str | None) -> int:
@@ -34,6 +43,59 @@ def _last_event_id(value: str | None) -> int:
         return max(0, int(value or 0))
     except ValueError:
         return 0
+
+
+def _sse_headers() -> dict[str, str]:
+    return {
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no",
+    }
+
+
+async def _resolve_existing_run(*, run_id: str | None, user_id: str, db: Any, prepared: Any) -> str:
+    """校验恢复运行存在且属于当前用户与会话。"""
+    if not run_id:
+        raise ApiError(ERR_SESSION_PARAM, "重连缺少 X-Agent-Run-Id", status=400)
+    try:
+        uuid.UUID(run_id)
+    except (ValueError, AttributeError, TypeError) as exc:
+        raise ApiError(ERR_SESSION_PARAM, "X-Agent-Run-Id 不是合法 UUID", status=400) from exc
+
+    result = await db.execute(
+        select(AgentRun).where(
+            AgentRun.id == run_id,
+            AgentRun.user_id == user_id,
+            AgentRun.session_id == prepared.chat_session.id,
+        )
+    )
+    if result.scalar_one_or_none() is None:
+        raise ApiError(ERR_SESSION_NOT_FOUND, "调研运行不存在或无权访问", status=404)
+    return run_id
+
+
+async def _resume_events(
+    *,
+    agent_run_id: str,
+    store: sse_event_service.SSEEventStore,
+    replay_from: int,
+    heartbeat_seconds: int,
+) -> Any:
+    """尾随已有运行的事件，不启动新调研、不重复落库。"""
+    last_emitted_id = replay_from
+    while True:
+        records = await store.after(agent_run_id, last_emitted_id)
+        if records:
+            for record in records:
+                if int(record["id"]) <= last_emitted_id:
+                    continue
+                yield sse_event_service.format_event(record)
+                last_emitted_id = int(record["id"])
+                if record["event"] in _TERMINAL_EVENTS:
+                    return
+            continue
+        yield ": ping\n\n"
+        await asyncio.sleep(heartbeat_seconds)
 
 
 @router.post("/ask", response_model=AskResponse)
@@ -58,27 +120,59 @@ async def ask_stream(
     db: DbSession = None,  # type: ignore[assignment]
 ) -> StreamingResponse:
     """流式问答（API-7）。业务校验在进入流之前完成，执行异常以 error 事件推送。"""
+    run_id_header = request.headers.get("x-agent-run-id")
+    replay_from = _last_event_id(request.headers.get("last-event-id"))
+    is_resume = bool(run_id_header or replay_from)
+
     prepared = await ask_service.prepare_ask(
-        payload=payload, user_id=user_id, db=db, settings=settings
+        payload=payload,
+        user_id=user_id,
+        db=db,
+        settings=settings,
+        followup=not is_resume,
     )
-    agent_run_id = str(uuid.uuid4())
     store = sse_event_service.get_event_store(settings)
+
+    if is_resume:
+        agent_run_id = await _resolve_existing_run(
+            run_id=run_id_header, user_id=user_id, db=db, prepared=prepared
+        )
+        return StreamingResponse(
+            _resume_events(
+                agent_run_id=agent_run_id,
+                store=store,
+                replay_from=replay_from,
+                heartbeat_seconds=settings.sse_heartbeat_seconds,
+            ),
+            status_code=status.HTTP_200_OK,
+            headers=_sse_headers(),
+            media_type="text/event-stream",
+        )
+
+    agent_run_id = str(uuid.uuid4())
     await store.clear(agent_run_id)
     queue: asyncio.Queue[EventRecord | None] = asyncio.Queue()
+    lock = await ask_service.acquire_ask_lock(
+        session_id=str(prepared.chat_session.id), settings=settings
+    )
 
     async def publish(event: str, data: dict[str, Any]) -> None:
         record = await store.append(agent_run_id, event, data)
         await queue.put(record)
 
-    await publish(
-        "started",
-        {
-            "agent_run_id": agent_run_id,
-            "session_id": prepared.chat_session.id,
-            "question": prepared.question,
-            "max_iterations": payload.max_iterations,
-        },
-    )
+    try:
+        await publish(
+            "started",
+            {
+                "agent_run_id": agent_run_id,
+                "session_id": prepared.chat_session.id,
+                "question": prepared.question,
+                "max_iterations": payload.max_iterations,
+            },
+        )
+    except Exception:
+        await ask_service.release_ask_lock(session_id=str(prepared.chat_session.id), lock=lock)
+        raise
 
     async def run() -> None:
         try:
@@ -141,12 +235,8 @@ async def ask_stream(
     task = asyncio.create_task(run())
 
     async def events():
+        last_emitted_id = 0
         try:
-            replay_from = _last_event_id(request.headers.get("last-event-id"))
-            if replay_from:
-                for record in await store.after(agent_run_id, replay_from):
-                    yield sse_event_service.format_event(record)
-
             while True:
                 if await request.is_disconnected():
                     break
@@ -159,20 +249,20 @@ async def ask_stream(
                     continue
                 if record is None:
                     break
+                if int(record["id"]) <= last_emitted_id:
+                    continue
                 yield sse_event_service.format_event(record)
+                last_emitted_id = int(record["id"])
         finally:
             if not task.done():
                 task.cancel()
             with suppress(asyncio.CancelledError, Exception):
                 await task
+            await ask_service.release_ask_lock(session_id=str(prepared.chat_session.id), lock=lock)
 
     return StreamingResponse(
         events(),
         status_code=status.HTTP_200_OK,
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
+        headers=_sse_headers(),
         media_type="text/event-stream",
     )

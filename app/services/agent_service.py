@@ -162,7 +162,7 @@ async def run_research(
         agent_run_id, deps, filename_map, max_iterations=max_iterations
     )
     metrics = runtime.get_metrics(config)
-    metrics["history_findings"] = list(history_findings or [])[:3]
+    metrics["history_findings"] = list(history_findings or [])
     state = _initial_state(
         agent_run_id=agent_run_id,
         user_id=user_id,
@@ -242,6 +242,18 @@ def _merge_delta(state: dict[str, Any], delta: dict[str, Any]) -> None:
             state[key] = value
 
 
+def _last_iteration_reason(delta: dict[str, Any]) -> str:
+    """从 decide_next_step 的最后一个迭代记录中读取判断理由。"""
+    records = delta.get("iterations") or []
+    if not records:
+        return ""
+    last = records[-1]
+    reason = getattr(last, "reason", None)
+    if reason is None and isinstance(last, dict):
+        reason = last.get("reason")
+    return str(reason or "")
+
+
 async def _emit_node_event(
     node_name: str,
     delta: dict[str, Any],
@@ -275,7 +287,7 @@ async def _emit_node_event(
             {
                 "iteration": int(state.get("iteration") or 0),
                 "decision": "answer" if delta.get("stop_reason") else "continue",
-                "reason": str(delta.get("reason") or ""),
+                "reason": _last_iteration_reason(delta),
                 "missing_information": str(delta.get("missing_information") or ""),
                 "findings_count": len(state.get("findings") or []),
                 "conflicts_count": len(state.get("conflicts") or []),
@@ -329,7 +341,7 @@ async def stream_research(
         agent_run_id, deps, filename_map, max_iterations=max_iterations
     )
     metrics = runtime.get_metrics(config)
-    metrics["history_findings"] = list(history_findings or [])[:3]
+    metrics["history_findings"] = list(history_findings or [])
     state = _initial_state(
         agent_run_id=agent_run_id,
         user_id=user_id,
@@ -357,7 +369,7 @@ async def stream_research(
             "流式多轮调研硬超时，尝试从检查点恢复已完成状态",
             extra=safe_extra(agent_run_id=agent_run_id),
         )
-        timeout_base: dict[str, Any] = dict(state)
+        timeout_base: dict[str, Any] = dict(current)
         try:
             snapshot = await graph.aget_state({"configurable": {"thread_id": agent_run_id}})
             if snapshot.values:

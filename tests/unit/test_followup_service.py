@@ -13,6 +13,8 @@ from app.services import followup_service, llm_service
 
 SESSION_ID = "7d4e5f60-8a9b-4c1d-2e3f-4a5b6c7d8e9f"
 RUN_ID = "c5d6e7f8-9a0b-4c1d-2e3f-4a5b6c7d8e9f"
+RUN_NEW = "00000000-0000-4000-8000-000000000001"
+RUN_OLD = "ffffff00-0000-4000-8000-000000000002"
 USER_ID = "9f2c1a8e-3b4d-4f6a-8c21-0e5d7a9b1c34"
 
 
@@ -109,3 +111,41 @@ async def test_rewrite_failure_falls_back_to_original_question(monkeypatch, sett
     )
     assert question == "那它的缺点呢？"
     assert findings == ["历史发现：成本下降 20%"]
+
+
+async def test_findings_follow_history_order_not_uuid_order(monkeypatch, settings):
+    newest = Message(
+        id=2,
+        session_id=SESSION_ID,
+        role="assistant",
+        content="新答案",
+        agent_run_id=RUN_NEW,
+        seq=4,
+    )
+    oldest = Message(
+        id=1,
+        session_id=SESSION_ID,
+        role="assistant",
+        content="旧答案",
+        agent_run_id=RUN_OLD,
+        seq=2,
+    )
+    newest_iteration = Iteration(
+        agent_run_id=RUN_NEW, iteration=1, findings=["新轮次发现"], conflicts=[]
+    )
+    oldest_iteration = Iteration(
+        agent_run_id=RUN_OLD, iteration=1, findings=["旧轮次发现"], conflicts=[]
+    )
+
+    async def _rewrite(*args, **kwargs):
+        return SimpleNamespace(payload=SimpleNamespace(question="追问"))
+
+    monkeypatch.setattr(llm_service, "invoke_structured", _rewrite)
+    _, findings = await followup_service.build_followup_context(
+        session_id=SESSION_ID,
+        question="追问",
+        user_id=USER_ID,
+        db=FakeDb([[newest, oldest], [newest_iteration, oldest_iteration]]),
+        settings=settings,
+    )
+    assert findings == ["旧轮次发现", "新轮次发现"]

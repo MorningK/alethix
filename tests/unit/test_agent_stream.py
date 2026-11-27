@@ -15,8 +15,11 @@ class FakeGraph:
 
     def __init__(self, chunks: list[dict]) -> None:
         self.chunks = chunks
+        self.config = None
 
     def astream(self, state, *, config, stream_mode):
+        self.config = config
+
         async def _generate():
             for chunk in self.chunks:
                 yield chunk
@@ -76,5 +79,63 @@ async def test_stream_research_maps_nodes_to_sse_events(monkeypatch):
     assert events[0][1]["queries"] == ["风险"]
     assert events[1][1]["iteration"] == 1
     assert events[2][1]["decision"] == "answer"
+    assert events[2][1]["reason"] == "证据充分"
     assert result.answer == "答案"
     assert result.stop_reason == "sufficient"
+
+
+async def test_stream_research_preserves_all_history_findings(monkeypatch):
+    graph = FakeGraph([])
+    monkeypatch.setattr(agent_service, "get_graph", lambda: graph)
+    findings = [f"历史发现-{index}" for index in range(6)]
+
+    async def _sink(event: str, data: dict) -> None:
+        return None
+
+    await agent_service.stream_research(
+        agent_run_id=RUN_ID,
+        question="追问",
+        session_id=SESSION_ID,
+        user_id="9f2c1a8e-3b4d-4f6a-8c21-0e5d7a9b1c34",
+        document_ids=["doc-1"],
+        filename_map={"doc-1": "报告.pdf"},
+        max_iterations=3,
+        event_sink=_sink,
+        history_findings=findings,
+        settings=Settings(_env_file=None, app_env="test", agent_timeout_seconds=10),
+    )
+    assert graph.config["configurable"]["metrics"]["history_findings"] == findings
+
+
+class TimeoutGraph:
+    def astream(self, state, *, config, stream_mode):
+        async def _generate():
+            yield {"plan_queries": {"iteration": 1, "queries": ["风险"]}}
+            yield {"analyze_evidence": {"findings": ["超时前发现"]}}
+            raise TimeoutError
+
+        return _generate()
+
+    async def aget_state(self, config):
+        raise RuntimeError("checkpoint unavailable")
+
+
+async def test_stream_timeout_recovers_from_accumulated_state(monkeypatch):
+    monkeypatch.setattr(agent_service, "get_graph", lambda: TimeoutGraph())
+
+    async def _sink(event: str, data: dict) -> None:
+        return None
+
+    result = await agent_service.stream_research(
+        agent_run_id=RUN_ID,
+        question="主要风险？",
+        session_id=SESSION_ID,
+        user_id="9f2c1a8e-3b4d-4f6a-8c21-0e5d7a9b1c34",
+        document_ids=["doc-1"],
+        filename_map={"doc-1": "报告.pdf"},
+        max_iterations=3,
+        event_sink=_sink,
+        settings=Settings(_env_file=None, app_env="test", agent_timeout_seconds=10),
+    )
+    assert result.stop_reason == "budget_exceeded"
+    assert "超时前发现" in result.answer

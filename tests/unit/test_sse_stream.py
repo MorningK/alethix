@@ -2,19 +2,20 @@
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app.api import ask as ask_api  # noqa: F401  # 确保路由模块已加载
-from app.core.errors import ERR_ASK_BAD_QUESTION, ApiError
+from app.core.errors import ERR_ASK_BAD_QUESTION, ERR_SESSION_BUSY, ApiError
 from app.db.postgres import get_session
 from app.main import app
 from app.schemas.ask import AskRequest
 from app.services import agent_service, ask_service, sse_event_service
 from app.services.agent_service import ResearchResult
-from app.services.ask_service import AskPrepared
+from app.services.ask_service import AskLock, AskPrepared
 from app.services.sse_event_service import InMemorySSEEventStore
 
 USER_ID = "9f2c1a8e-3b4d-4f6a-8c21-0e5d7a9b1c34"
@@ -44,6 +45,7 @@ def stream_env(monkeypatch):
         question="主要风险有哪些？",
         history_findings=[],
     )
+    lock_calls: list[tuple[str, dict]] = []
 
     async def _prepare(**kwargs):
         return prepared
@@ -51,11 +53,20 @@ def stream_env(monkeypatch):
     async def _persist(**kwargs):
         return RUN_ID
 
+    async def _acquire(**kwargs):
+        lock_calls.append(("acquire", kwargs))
+        return AskLock(token="token", degraded=False)
+
+    async def _release(**kwargs):
+        lock_calls.append(("release", kwargs))
+
     monkeypatch.setattr(ask_service, "prepare_ask", _prepare)
     monkeypatch.setattr(ask_service, "persist_research", _persist)
+    monkeypatch.setattr(ask_service, "acquire_ask_lock", _acquire)
+    monkeypatch.setattr(ask_service, "release_ask_lock", _release)
     sse_event_service.set_event_store(InMemorySSEEventStore(max_events=100))
 
-    yield monkeypatch
+    yield {"monkeypatch": monkeypatch, "lock_calls": lock_calls}
 
     app.dependency_overrides.clear()
     sse_event_service.set_event_store(None)
@@ -102,7 +113,7 @@ async def _fake_stream(**kwargs):
 
 
 def test_stream_emits_full_event_sequence(stream_env):
-    stream_env.setattr(agent_service, "stream_research", _fake_stream)
+    stream_env["monkeypatch"].setattr(agent_service, "stream_research", _fake_stream)
 
     response = TestClient(app).post("/api/v1/ask/stream", headers=HEADERS, json=PAYLOAD)
     assert response.status_code == 200
@@ -115,13 +126,14 @@ def test_stream_emits_full_event_sequence(stream_env):
     assert "数据合规风险" in body
     assert "id: 1" in body
     assert "event: error" not in body
+    assert [name for name, _ in stream_env["lock_calls"]] == ["acquire", "release"]
 
 
 def test_pre_stream_validation_returns_json_error(stream_env):
     async def _fail(**kwargs):
         raise ApiError(ERR_ASK_BAD_QUESTION, "question 不能为空", status=400)
 
-    stream_env.setattr(ask_service, "prepare_ask", _fail)
+    stream_env["monkeypatch"].setattr(ask_service, "prepare_ask", _fail)
 
     response = TestClient(app).post("/api/v1/ask/stream", headers=HEADERS, json=PAYLOAD)
     assert response.status_code == 400
@@ -132,9 +144,53 @@ def test_execution_error_is_pushed_as_sse_error_event(stream_env):
     async def _fail(**kwargs):
         raise ApiError("5003001", "智能体执行失败", status=500)
 
-    stream_env.setattr(agent_service, "stream_research", _fail)
+    stream_env["monkeypatch"].setattr(agent_service, "stream_research", _fail)
 
     response = TestClient(app).post("/api/v1/ask/stream", headers=HEADERS, json=PAYLOAD)
     assert response.status_code == 200
     assert "event: error" in response.text
     assert "5003001" in response.text
+
+
+def test_concurrent_stream_is_rejected_before_response(stream_env):
+    async def _busy(**kwargs):
+        raise ApiError(ERR_SESSION_BUSY, "该会话正在处理上一个问题", status=409)
+
+    stream_env["monkeypatch"].setattr(ask_service, "acquire_ask_lock", _busy)
+
+    response = TestClient(app).post("/api/v1/ask/stream", headers=HEADERS, json=PAYLOAD)
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == ERR_SESSION_BUSY
+
+
+def test_resume_replays_original_run_without_new_research(stream_env):
+    monkeypatch = stream_env["monkeypatch"]
+    store = sse_event_service.get_event_store()
+
+    async def _seed():
+        await store.append(RUN_ID, "started", {"agent_run_id": RUN_ID})
+        await store.append(RUN_ID, "final_answer", {"agent_run_id": RUN_ID, "answer": "缓存答案"})
+
+    asyncio.run(_seed())
+
+    async def _execute(self, stmt, params=None):
+        return SimpleNamespace(scalar_one_or_none=lambda: SimpleNamespace(id=RUN_ID))
+
+    monkeypatch.setattr(DummyDb, "execute", _execute)
+
+    async def _must_not_run(**kwargs):
+        raise AssertionError("恢复运行不得启动新调研")
+
+    monkeypatch.setattr(agent_service, "stream_research", _must_not_run)
+    monkeypatch.setattr(ask_service, "persist_research", _must_not_run)
+
+    response = TestClient(app).post(
+        "/api/v1/ask/stream",
+        headers={**HEADERS, "X-Agent-Run-Id": RUN_ID, "Last-Event-ID": "1"},
+        json=PAYLOAD,
+    )
+    assert response.status_code == 200
+    assert "event: final_answer" in response.text
+    assert "缓存答案" in response.text
+    assert "event: started" not in response.text
+    assert stream_env["lock_calls"] == []

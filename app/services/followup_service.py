@@ -75,10 +75,14 @@ async def build_followup_context(
             iteration_rows = await db.execute(
                 select(Iteration)
                 .where(Iteration.agent_run_id.in_(run_ids))
-                .order_by(Iteration.agent_run_id.asc(), Iteration.iteration.asc())
+                .order_by(Iteration.iteration.asc())
             )
+            by_run: dict[str, list[Iteration]] = {}
             for row in iteration_rows.scalars().all():
-                findings.extend(str(item) for item in (row.findings or []) if str(item).strip())
+                by_run.setdefault(str(row.agent_run_id), []).append(row)
+            for message in reversed(history_messages):
+                for row in by_run.get(str(message.agent_run_id), []):
+                    findings.extend(str(item) for item in (row.findings or []) if str(item).strip())
     except Exception as exc:  # noqa: BLE001
         logger.warning(
             "追问历史读取失败，按普通提问处理",

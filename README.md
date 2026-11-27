@@ -353,9 +353,13 @@ curl -H "X-User-Id: <uuid>" \
   "http://127.0.0.1:8000/api/v1/sessions/<session_uuid>/messages?page=1&page_size=20"
 ```
 
-断线重连时在请求头携带 `Last-Event-ID: <上一条事件编号>`，服务端从该编号之后重放最近 100 条内
-的事件；空闲 15 秒会收到 `: ping` 注释行。前端在 `/chat/<session_id>` 提供停止按钮，
-点击或切换会话会 `abort()` 并取消服务端图执行。
+断线重连时同时携带 `Last-Event-ID: <上一条事件编号>` 与 `X-Agent-Run-Id: <原 agent_run_id>`，
+服务端校验运行归属后只回放/尾随原运行的事件，不会启动新调研或重复落库；空闲 15 秒会收到
+`: ping` 注释行。前端在 `/chat/<session_id>` 提供停止按钮，点击或切换会话会 `abort()`
+并取消服务端图执行。
+
+SSE 事件优先存于 Redis 以支持多 worker 重放；Redis 故障期间自动回退到进程内存，
+此时 `Last-Event-ID` 重放仅在产生事件的同一进程内有效。
 
 ---
 

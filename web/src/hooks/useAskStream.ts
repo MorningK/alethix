@@ -19,6 +19,7 @@ interface StreamState {
 export function useAskStream() {
   const controllerRef = useRef<AbortController | null>(null);
   const lastEventIdRef = useRef<number | null>(null);
+  const generationRef = useRef(0);
   const [state, setState] = useState<StreamState>({
     timeline: [],
     running: false,
@@ -29,12 +30,15 @@ export function useAskStream() {
   });
 
   const stop = useCallback(() => {
+    generationRef.current += 1;
     controllerRef.current?.abort();
     controllerRef.current = null;
     setState((prev) => ({ ...prev, running: false, aborted: true }));
   }, []);
 
   const start = useCallback((payload: AskRequest, onFinal?: (event: FinalAnswerEvent) => void) => {
+    generationRef.current += 1;
+    const generation = generationRef.current;
     controllerRef.current?.abort();
     lastEventIdRef.current = null;
     setState({
@@ -48,6 +52,7 @@ export function useAskStream() {
 
     controllerRef.current = askStream(payload, {
       onEvent: (event: ResearchEvent, eventId?: number) => {
+        if (generation !== generationRef.current) return;
         if (eventId) lastEventIdRef.current = eventId;
 
         if (event.type === 'error') {
@@ -107,9 +112,11 @@ export function useAskStream() {
         }
       },
       onError: (message) => {
+        if (generation !== generationRef.current) return;
         setState((prev) => ({ ...prev, running: false, error: message }));
       },
       onClose: () => {
+        if (generation !== generationRef.current) return;
         setState((prev) => ({
           ...prev,
           running: false,
@@ -120,6 +127,9 @@ export function useAskStream() {
   }, []);
 
   const reset = useCallback(() => {
+    generationRef.current += 1;
+    controllerRef.current?.abort();
+    controllerRef.current = null;
     lastEventIdRef.current = null;
     setState({
       timeline: [],

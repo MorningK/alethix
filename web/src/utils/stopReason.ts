@@ -57,6 +57,13 @@ export const CONFIDENCE_COLOR: Record<Confidence, string> = {
   low: 'warning',
 };
 
+const UNKNOWN_STOP_REASON_META: StopReasonMeta = {
+  label: '终止原因未记录',
+  description: '该历史回答未携带终止原因，请结合答案与引用内容自行核对。',
+  tone: 'info',
+};
+
 export function stopReasonMeta(reason: StopReason | null | undefined): StopReasonMeta {
-  return STOP_REASON_META[reason ?? 'sufficient'];
+  if (!reason) return UNKNOWN_STOP_REASON_META;
+  return STOP_REASON_META[reason];
 }
