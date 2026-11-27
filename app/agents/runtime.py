@@ -75,6 +75,7 @@ def build_run_config(
                 "last_new_chunk_count": 0,
                 "last_findings": [],
                 "last_conflicts": [],
+                "history_findings": [],
             },
         },
         "recursion_limit": rounds * 4 + 4,

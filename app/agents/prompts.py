@@ -82,6 +82,7 @@ def render_plan_queries(
     missing_information: str,
     *,
     iteration: int = 1,
+    history_findings: list[str] | None = None,
 ) -> str:
     """NODE-1 查询规划 Prompt（PRD §7.2）。"""
     parts = [
@@ -101,6 +102,11 @@ def render_plan_queries(
     if iteration > 1:
         parts.append("\n当前已获得的发现：\n" + _format_list(findings))
         parts.append("\n当前信息缺口：\n" + (missing_information.strip() or "无"))
+    if history_findings:
+        parts.append(
+            "\n同一会话的历史调研结论（仅作为已知信息，不注入历史原文）：\n"
+            + _format_list(history_findings)
+        )
     parts.append("\n请生成 1 到 3 条新的检索查询。")
     parts.append("\n" + _output_format(PLAN_QUERIES_JSON_SCHEMA))
     return "\n".join(parts)
@@ -135,6 +141,7 @@ def render_decide_next_step(
     searched_queries: list[str],
     iteration: int,
     max_iterations: int,
+    history_findings: list[str] | None = None,
 ) -> str:
     """NODE-4 充分性判断 Prompt（PRD §7.4）。"""
     return "\n".join(
@@ -158,6 +165,14 @@ def render_decide_next_step(
             "</rules>\n",
             "用户问题：\n" + question.strip(),
             "\n当前已获得的发现：\n" + _format_list(findings),
+            *(
+                [
+                    "\n同一会话的历史调研结论（仅作为已知信息，不注入历史原文）：\n"
+                    + _format_list(history_findings)
+                ]
+                if history_findings
+                else []
+            ),
             "\n已识别的冲突：\n" + _format_list(conflicts),
             "\n已检索过的查询：\n" + _format_list(searched_queries),
             f"\n当前轮次：{iteration} / 最大轮次：{max_iterations}",

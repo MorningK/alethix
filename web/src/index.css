@@ -45,3 +45,19 @@ body {
   font-family: var(--font-sans);
   font-size: 14px;
 }
+
+/* 仅调研时间线节点使用轻微入场动效（200ms） */
+@keyframes node-enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.node-enter {
+  animation: node-enter 200ms ease-out both;
+}

@@ -103,12 +103,6 @@ def test_ask_propagates_llm_error(client, monkeypatch):
     assert response.json()["error"]["code"] == "5032001"
 
 
-def test_ask_stream_still_placeholder(client):
-    http, _ = client
-    response = http.post("/api/v1/ask/stream", headers=HEADERS, json=PAYLOAD)
-    assert response.status_code == 501
-
-
 def test_validate_payload_rejects_bad_question():
     with pytest.raises(ApiError) as exc:
         ask_service._validate_payload(AskRequest(session_id=SESSION_ID, question="   "))

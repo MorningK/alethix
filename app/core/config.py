@@ -82,6 +82,11 @@ class Settings(BaseSettings):
     agent_embedding_cache_ttl_seconds: int = 86400
     agent_session_lock_ttl_seconds: int = 180
 
+    # ---------------- SSE 流式问答（M4） ----------------
+    sse_heartbeat_seconds: int = 15
+    sse_event_ttl_seconds: int = 3600
+    sse_max_events: int = 100
+
     # ---------------- 文档处理 ----------------
     doc_max_file_size_mb: int = 50
     doc_allowed_extensions: str = "pdf,md,txt"

@@ -1,12 +1,13 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { askStream } from '@/api/sse';
 import type { AskRequest } from '@/types/ask';
-import type { TimelineNode } from '@/types/sse';
+import type { FinalAnswerEvent, ResearchEvent, TimelineNode } from '@/types/sse';
 
 interface StreamState {
   timeline: TimelineNode[];
   running: boolean;
   error: string | null;
+  finalAnswer: FinalAnswerEvent | null;
 }
 
 /**
@@ -15,10 +16,12 @@ interface StreamState {
  */
 export function useAskStream() {
   const controllerRef = useRef<AbortController | null>(null);
+  const lastEventIdRef = useRef<number | null>(null);
   const [state, setState] = useState<StreamState>({
     timeline: [],
     running: false,
     error: null,
+    finalAnswer: null,
   });
 
   const stop = useCallback(() => {
@@ -27,28 +30,37 @@ export function useAskStream() {
     setState((prev) => ({ ...prev, running: false }));
   }, []);
 
-  const start = useCallback((payload: AskRequest, onFinal: () => void) => {
+  const start = useCallback((payload: AskRequest, onFinal?: (event: FinalAnswerEvent) => void) => {
     controllerRef.current?.abort();
-    setState({ timeline: [], running: true, error: null });
+    lastEventIdRef.current = null;
+    setState({ timeline: [], running: true, error: null, finalAnswer: null });
 
     controllerRef.current = askStream(payload, {
-      onEvent: (event) => {
-        setState((prev) => {
-          if (event.type === 'iteration') {
-            return {
-              ...prev,
-              timeline: [
-                ...prev.timeline,
-                {
-                  iteration: event.iteration,
-                  queries: event.queries,
-                  loading: true,
-                },
-              ],
-            };
-          }
+      onEvent: (event: ResearchEvent, eventId?: number) => {
+        if (eventId) lastEventIdRef.current = eventId;
 
-          if (event.type === 'retrieved' || event.type === 'reasoning') {
+        if (event.type === 'error') {
+          setState((prev) => ({ ...prev, running: false, error: event.message }));
+          return;
+        }
+
+        if (event.type === 'iteration') {
+          setState((prev) => ({
+            ...prev,
+            timeline: [
+              ...prev.timeline,
+              {
+                iteration: event.iteration,
+                queries: event.queries,
+                loading: true,
+              },
+            ],
+          }));
+          return;
+        }
+
+        if (event.type === 'retrieved' || event.type === 'reasoning') {
+          setState((prev) => {
             const last = prev.timeline[prev.timeline.length - 1];
             if (!last) return prev;
             const merged: TimelineNode =
@@ -64,24 +76,23 @@ export function useAskStream() {
                     decision: event.decision,
                     reason: event.reason,
                     missing_information: event.missing_information,
+                    findings_count: event.findings_count,
+                    conflicts_count: event.conflicts_count,
                     loading: false,
                   };
             return { ...prev, timeline: [...prev.timeline.slice(0, -1), merged] };
-          }
-
-          if (event.type === 'final_answer') {
-            return {
-              ...prev,
-              running: false,
-              timeline: prev.timeline.map((n) => ({ ...n, loading: false })),
-            };
-          }
-
-          return prev;
-        });
+          });
+          return;
+        }
 
         if (event.type === 'final_answer') {
-          onFinal();
+          setState((prev) => ({
+            ...prev,
+            running: false,
+            finalAnswer: event,
+            timeline: prev.timeline.map((node) => ({ ...node, loading: false })),
+          }));
+          onFinal?.(event);
         }
       },
       onError: (message) => {
@@ -92,6 +103,8 @@ export function useAskStream() {
       },
     });
   }, []);
+
+  useEffect(() => () => controllerRef.current?.abort(), []);
 
   return { ...state, start, stop };
 }

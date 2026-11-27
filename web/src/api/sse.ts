@@ -4,9 +4,10 @@ import type { ResearchEvent } from '@/types/sse';
 
 const baseURL = import.meta.env.VITE_API_BASE_URL ?? '/api/v1';
 const devUserId = import.meta.env.VITE_USER_ID ?? '';
+const MAX_RETRIES = 3;
 
 export interface StreamHandlers {
-  onEvent: (event: ResearchEvent) => void;
+  onEvent: (event: ResearchEvent, eventId?: number) => void;
   onError?: (message: string, code?: string) => void;
   onClose?: () => void;
 }
@@ -21,35 +22,63 @@ export interface StreamHandlers {
  */
 export function askStream(payload: AskRequest, handlers: StreamHandlers): AbortController {
   const controller = new AbortController();
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...(devUserId ? { 'X-User-Id': devUserId } : {}),
+  };
+  let retries = 0;
+  let fatal = false;
 
   fetchEventSource(`${baseURL}/ask/stream`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(devUserId ? { 'X-User-Id': devUserId } : {}),
-    },
+    headers,
     body: JSON.stringify(payload),
     signal: controller.signal,
 
     async onopen(response) {
       if (!response.ok) {
+        fatal = response.status < 500;
         const text = await response.text().catch(() => '');
-        handlers.onError?.(`服务返回异常：${response.status} ${text}`, String(response.status));
+        const message = `服务返回异常：${response.status} ${text}`;
+        handlers.onError?.(message, String(response.status));
+        throw new Error(message);
       }
+      retries = 0;
     },
 
     onmessage(message) {
-      // 心跳是 `: ping` 注释行，fetch-event-source 已过滤；此处再兜一层
+      if (message.id) {
+        headers['Last-Event-ID'] = message.id;
+      }
       if (!message.event || !message.data) return;
-
+      if (message.event === 'error') {
+        const parsed = JSON.parse(message.data) as Record<string, unknown>;
+        handlers.onEvent({
+          type: 'error',
+          code: String(parsed.code ?? 'UNKNOWN'),
+          message: String(parsed.message ?? '调研过程出现异常'),
+          trace_id: String(parsed.trace_id ?? ''),
+        } as ResearchEvent);
+        return;
+      }
       const parsed = JSON.parse(message.data) as Record<string, unknown>;
-      handlers.onEvent({ type: message.event, ...parsed } as ResearchEvent);
+      const eventId = Number(message.id);
+      handlers.onEvent(
+        { type: message.event, ...parsed } as ResearchEvent,
+        Number.isFinite(eventId) ? eventId : undefined,
+      );
     },
 
     onerror(error) {
-      // 返回给库的 error 会被抛出；这里转为可读提示并中止重试
-      handlers.onError?.(error instanceof Error ? error.message : '连接异常');
-      throw error;
+      if (controller.signal.aborted) {
+        throw error;
+      }
+      const message = error instanceof Error ? error.message : '连接异常';
+      if (fatal || retries >= MAX_RETRIES) {
+        handlers.onError?.(message, fatal ? 'FATAL' : 'RETRY_EXHAUSTED');
+        throw error;
+      }
+      retries += 1;
     },
 
     onclose() {
