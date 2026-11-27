@@ -72,6 +72,10 @@ class InMemorySSEEventStore:
         self._sequence.pop(agent_run_id, None)
         self._expires.pop(agent_run_id, None)
 
+    def set_sequence(self, agent_run_id: str, sequence: int) -> None:
+        """接力主存储的事件编号，避免降级后编号重复。"""
+        self._sequence[agent_run_id] = max(self._sequence.get(agent_run_id, 0), sequence)
+
 
 class RedisSSEEventStore:
     """多 worker 场景下的可重放事件存储。"""
@@ -124,6 +128,7 @@ class ResilientSSEEventStore:
         self._primary = primary
         self._fallback = fallback
         self._degraded = False
+        self._primary_sequences: dict[str, int] = {}
 
     @property
     def degraded(self) -> bool:
@@ -140,9 +145,16 @@ class ResilientSSEEventStore:
     async def append(self, agent_run_id: str, event: str, data: dict[str, Any]) -> EventRecord:
         if not self._degraded:
             try:
-                return await self._primary.append(agent_run_id, event, data)
+                record = await self._primary.append(agent_run_id, event, data)
+                self._primary_sequences[agent_run_id] = max(
+                    self._primary_sequences.get(agent_run_id, 0), int(record["id"])
+                )
+                return record
             except Exception as exc:  # noqa: BLE001
                 self._degrade("append", exc)
+        set_sequence = getattr(self._fallback, "set_sequence", None)
+        if callable(set_sequence):
+            set_sequence(agent_run_id, self._primary_sequences.get(agent_run_id, 0))
         return await self._fallback.append(agent_run_id, event, data)
 
     async def after(self, agent_run_id: str, event_id: int) -> list[EventRecord]:
@@ -154,6 +166,7 @@ class ResilientSSEEventStore:
         return await self._fallback.after(agent_run_id, event_id)
 
     async def clear(self, agent_run_id: str) -> None:
+        self._primary_sequences.pop(agent_run_id, None)
         if not self._degraded:
             try:
                 await self._primary.clear(agent_run_id)

@@ -29,6 +29,18 @@ class DummyDb:
     async def execute(self, stmt, params=None):
         return None
 
+    async def get(self, model, key):
+        return None
+
+    def add(self, item):
+        return None
+
+    async def commit(self):
+        return None
+
+    async def rollback(self):
+        return None
+
 
 @pytest.fixture(autouse=True)
 def stream_env(monkeypatch):
@@ -141,15 +153,58 @@ def test_pre_stream_validation_returns_json_error(stream_env):
 
 
 def test_execution_error_is_pushed_as_sse_error_event(stream_env):
+    calls: list[dict] = []
+
     async def _fail(**kwargs):
         raise ApiError("5003001", "智能体执行失败", status=500)
 
+    async def _mark(**kwargs):
+        calls.append(kwargs)
+
     stream_env["monkeypatch"].setattr(agent_service, "stream_research", _fail)
+    stream_env["monkeypatch"].setattr(ask_service, "mark_run_failed", _mark)
 
     response = TestClient(app).post("/api/v1/ask/stream", headers=HEADERS, json=PAYLOAD)
     assert response.status_code == 200
     assert "event: error" in response.text
     assert "5003001" in response.text
+    assert len(calls) == 1
+
+
+def test_stream_registers_run_before_start(stream_env):
+    calls: list[dict] = []
+
+    async def _register(**kwargs):
+        calls.append(kwargs)
+
+    stream_env["monkeypatch"].setattr(ask_service, "register_stream_run", _register, raising=False)
+    stream_env["monkeypatch"].setattr(agent_service, "stream_research", _fake_stream)
+
+    response = TestClient(app).post("/api/v1/ask/stream", headers=HEADERS, json=PAYLOAD)
+    assert response.status_code == 200
+    assert len(calls) == 1
+    assert calls[0]["agent_run_id"] in response.text
+
+
+class EmptyReplayStore:
+    async def after(self, agent_run_id, event_id):
+        return []
+
+
+def test_completed_run_with_no_replayable_events_closes_stream():
+    async def _collect():
+        return [
+            chunk
+            async for chunk in ask_api._resume_events(
+                agent_run_id=RUN_ID,
+                run_status="done",
+                store=EmptyReplayStore(),
+                replay_from=0,
+                heartbeat_seconds=0,
+            )
+        ]
+
+    assert asyncio.run(_collect()) == []
 
 
 def test_concurrent_stream_is_rejected_before_response(stream_env):
@@ -163,6 +218,25 @@ def test_concurrent_stream_is_rejected_before_response(stream_env):
     assert response.json()["error"]["code"] == ERR_SESSION_BUSY
 
 
+@pytest.mark.parametrize("run_status", ["running", "done", "failed"])
+def test_resolve_existing_run_allows_all_lifecycle_statuses(monkeypatch, run_status):
+    async def _execute(self, stmt, params=None):
+        return SimpleNamespace(
+            scalar_one_or_none=lambda: SimpleNamespace(id=RUN_ID, status=run_status)
+        )
+
+    monkeypatch.setattr(DummyDb, "execute", _execute)
+    prepared = SimpleNamespace(chat_session=SimpleNamespace(id=SESSION_ID))
+
+    resolved_id, resolved_status = asyncio.run(
+        ask_api._resolve_existing_run(
+            run_id=RUN_ID, user_id=USER_ID, db=DummyDb(), prepared=prepared
+        )
+    )
+    assert resolved_id == RUN_ID
+    assert resolved_status == run_status
+
+
 def test_resume_replays_original_run_without_new_research(stream_env):
     monkeypatch = stream_env["monkeypatch"]
     store = sse_event_service.get_event_store()
@@ -174,7 +248,7 @@ def test_resume_replays_original_run_without_new_research(stream_env):
     asyncio.run(_seed())
 
     async def _execute(self, stmt, params=None):
-        return SimpleNamespace(scalar_one_or_none=lambda: SimpleNamespace(id=RUN_ID))
+        return SimpleNamespace(scalar_one_or_none=lambda: SimpleNamespace(id=RUN_ID, status="done"))
 
     monkeypatch.setattr(DummyDb, "execute", _execute)
 

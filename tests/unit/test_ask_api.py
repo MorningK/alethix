@@ -198,6 +198,12 @@ async def test_persist_locks_session_and_sets_first_turn_title():
             self.execution_options = dict(stmt.get_execution_options())
             return SimpleNamespace(scalar_one_or_none=lambda: locked)
 
+        async def get(self, model, key):
+            return None
+
+        def add(self, row) -> None:
+            self.rows.append(row)
+
         def add_all(self, rows) -> None:
             self.rows = list(rows)
 

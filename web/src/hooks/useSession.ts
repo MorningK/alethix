@@ -19,6 +19,9 @@ interface PaginationState {
 export function useSessionMessages(sessionId: string | null) {
   const queryClient = useQueryClient();
   const [loadingOlder, setLoadingOlder] = useState(false);
+  const [olderErrorState, setOlderErrorState] = useState<{ key: string; message: string } | null>(
+    null,
+  );
   const [pagination, setPagination] = useState<PaginationState>({
     key: '',
     olderItems: [],
@@ -34,6 +37,7 @@ export function useSessionMessages(sessionId: string | null) {
 
   const latestPage = Math.max(1, Math.ceil((metaQuery.data?.total ?? 0) / PAGE_SIZE));
   const paginationKey = `${sessionId ?? ''}:${latestPage}`;
+  const olderError = olderErrorState?.key === paginationKey ? olderErrorState.message : null;
   const activePagination: PaginationState =
     pagination.key === paginationKey
       ? pagination
@@ -68,6 +72,7 @@ export function useSessionMessages(sessionId: string | null) {
     if (!sessionId || oldestLoadedPage <= 1 || loadingOlder) return;
     const page = oldestLoadedPage - 1;
     setLoadingOlder(true);
+    setOlderErrorState(null);
     try {
       const result = await listMessages(sessionId, { page, page_size: PAGE_SIZE });
       setPagination((prev) => {
@@ -82,6 +87,9 @@ export function useSessionMessages(sessionId: string | null) {
         ].toSorted(byMessageId);
         return { key: paginationKey, olderItems, oldestLoadedPage: page };
       });
+    } catch (error) {
+      console.error('[session] 加载更早消息失败', error);
+      setOlderErrorState({ key: paginationKey, message: '更早消息加载失败，请重试' });
     } finally {
       setLoadingOlder(false);
     }
@@ -96,7 +104,8 @@ export function useSessionMessages(sessionId: string | null) {
     total: metaQuery.data?.total ?? 0,
     page: latestPage,
     isLoading: metaQuery.isLoading || messagesQuery.isLoading,
-    isError: metaQuery.isError || messagesQuery.isError,
+    isError: metaQuery.isError || messagesQuery.isError || Boolean(olderError),
+    olderError,
     hasOlder: activePagination.oldestLoadedPage > 1,
     loadOlder,
     loadingOlder,

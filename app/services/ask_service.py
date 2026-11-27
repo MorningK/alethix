@@ -296,32 +296,35 @@ async def _persist(
         retrieved_count = (
             sum(int(item.retrieved_chunk_count) for item in iterations) if iterations else len(hits)
         )
-        agent_run = AgentRun(
-            id=run_id,
-            session_id=locked.id,
-            user_id=user_id,
-            question=agent_question or payload.question,
-            document_ids=list(scope_ids),
-            max_iterations=payload.max_iterations,
-            status="done",
-            stop_reason=stop_reason,
-            iteration_count=iteration_count,
-            retrieved_chunk_count=retrieved_count,
-            citation_count=len(citations),
-            citation_filtered_count=citation_filtered_count,
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            token_used=token_used,
-            llm_call_count=(
-                llm_call_count
-                if llm_call_count is not None
-                else 0
-                if stop_reason == "low_relevance"
-                else 1
-            ),
-            fallback_count=fallback_count,
-            duration_ms=duration_ms,
+        agent_run = await db.get(AgentRun, run_id)
+        if agent_run is None:
+            agent_run = AgentRun(
+                id=run_id,
+                session_id=locked.id,
+                user_id=user_id,
+            )
+            db.add(agent_run)
+        agent_run.question = agent_question or payload.question
+        agent_run.document_ids = list(scope_ids)
+        agent_run.max_iterations = payload.max_iterations
+        agent_run.status = "done"
+        agent_run.stop_reason = stop_reason
+        agent_run.iteration_count = iteration_count
+        agent_run.retrieved_chunk_count = retrieved_count
+        agent_run.citation_count = len(citations)
+        agent_run.citation_filtered_count = citation_filtered_count
+        agent_run.prompt_tokens = prompt_tokens
+        agent_run.completion_tokens = completion_tokens
+        agent_run.token_used = token_used
+        agent_run.llm_call_count = (
+            llm_call_count
+            if llm_call_count is not None
+            else 0
+            if stop_reason == "low_relevance"
+            else 1
         )
+        agent_run.fallback_count = fallback_count
+        agent_run.duration_ms = duration_ms
         if iterations:
             iteration_rows = [
                 Iteration(
@@ -390,6 +393,63 @@ async def _persist(
         logger.warning("问答结果持久化失败", extra=safe_extra(reason=type(exc).__name__))
         raise ApiError(ERR_AGENT_FAILED, "问答结果保存失败", status=500) from exc
     return run_id
+
+
+async def register_stream_run(
+    *,
+    prepared: AskPrepared,
+    agent_run_id: str,
+    user_id: str,
+    db: AsyncSession,
+) -> None:
+    """在 started 事件前登记运行归属，使 pending 运行也可被重连恢复。"""
+    try:
+        existing = await db.get(AgentRun, agent_run_id)
+        if existing is None:
+            db.add(
+                AgentRun(
+                    id=agent_run_id,
+                    session_id=prepared.chat_session.id,
+                    user_id=user_id,
+                    question=prepared.question,
+                    document_ids=list(prepared.scope_ids),
+                    max_iterations=prepared.payload.max_iterations,
+                    status="running",
+                )
+            )
+        await db.commit()
+        logger.info(
+            "流式调研运行已登记",
+            extra=safe_extra(agent_run_id=agent_run_id, session_id=str(prepared.chat_session.id)),
+        )
+    except Exception as exc:  # noqa: BLE001
+        await db.rollback()
+        logger.warning(
+            "流式调研运行登记失败",
+            extra=safe_extra(agent_run_id=agent_run_id, reason=type(exc).__name__),
+        )
+        raise ApiError(ERR_AGENT_FAILED, "调研运行登记失败", status=500) from exc
+
+
+async def mark_run_failed(
+    *,
+    agent_run_id: str,
+    user_id: str,
+    db: AsyncSession,
+) -> None:
+    """把预登记运行标记为失败；失败本身不阻断错误事件推送。"""
+    try:
+        run = await db.get(AgentRun, agent_run_id)
+        if run is not None and run.user_id == user_id:
+            run.status = "failed"
+            run.stop_reason = "internal_error"
+            await db.commit()
+    except Exception as exc:  # noqa: BLE001
+        await db.rollback()
+        logger.warning(
+            "流式调研运行失败状态更新失败",
+            extra=safe_extra(agent_run_id=agent_run_id, reason=type(exc).__name__),
+        )
 
 
 async def persist_research(

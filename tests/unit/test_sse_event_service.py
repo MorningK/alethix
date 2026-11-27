@@ -57,6 +57,36 @@ class BrokenStore:
         raise RuntimeError("redis down")
 
 
+class PrimaryOnceThenBrokenStore:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def append(self, agent_run_id, event, data):
+        self.calls += 1
+        if self.calls == 1:
+            return {"id": 1, "event": event, "data": data}
+        raise RuntimeError("redis down")
+
+    async def after(self, agent_run_id, event_id):
+        return []
+
+    async def clear(self, agent_run_id):
+        return None
+
+
+async def test_resilient_store_continues_sequence_after_degradation():
+    store = ResilientSSEEventStore(
+        primary=PrimaryOnceThenBrokenStore(), fallback=InMemorySSEEventStore(max_events=100)
+    )
+
+    first = await store.append("run-1", "started", {})
+    second = await store.append("run-1", "final_answer", {})
+
+    assert first["id"] == 1
+    assert second["id"] == 2
+    assert store.degraded is True
+
+
 async def test_resilient_store_falls_back_on_redis_failure():
     store = ResilientSSEEventStore(
         primary=BrokenStore(), fallback=InMemorySSEEventStore(max_events=100)

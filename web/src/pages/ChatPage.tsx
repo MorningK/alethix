@@ -187,7 +187,7 @@ export function ChatPage() {
               type="warning"
               showIcon
               title="会话历史加载失败"
-              description="当前答案与调研过程仍可查看，稍后可刷新页面重试。"
+              description={history.olderError ?? '当前答案与调研过程仍可查看，稍后可刷新页面重试。'}
             />
           )}
           {history.hasOlder && (

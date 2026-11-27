@@ -28,6 +28,15 @@ export function askStream(payload: AskRequest, handlers: StreamHandlers): AbortC
   };
   let retries = 0;
   let fatal = false;
+  let agentRunId: string | null = null;
+
+  const fetchWithRunId: typeof fetch = (input, init) => {
+    const requestHeaders = new Headers(init?.headers);
+    if (agentRunId) {
+      requestHeaders.set('X-Agent-Run-Id', agentRunId);
+    }
+    return fetch(input, { ...init, headers: requestHeaders });
+  };
 
   fetchEventSource(`${baseURL}/ask/stream`, {
     method: 'POST',
@@ -35,6 +44,7 @@ export function askStream(payload: AskRequest, handlers: StreamHandlers): AbortC
     body: JSON.stringify(payload),
     signal: controller.signal,
     openWhenHidden: true,
+    fetch: fetchWithRunId,
 
     async onopen(response) {
       if (!response.ok) {
@@ -51,7 +61,7 @@ export function askStream(payload: AskRequest, handlers: StreamHandlers): AbortC
       if (!message.event || !message.data) return;
       const parsed = JSON.parse(message.data) as Record<string, unknown>;
       if (typeof parsed.agent_run_id === 'string' && parsed.agent_run_id) {
-        headers['X-Agent-Run-Id'] = parsed.agent_run_id;
+        agentRunId = parsed.agent_run_id;
       }
       if (message.event === 'error') {
         handlers.onEvent({

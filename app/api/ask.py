@@ -53,7 +53,9 @@ def _sse_headers() -> dict[str, str]:
     }
 
 
-async def _resolve_existing_run(*, run_id: str | None, user_id: str, db: Any, prepared: Any) -> str:
+async def _resolve_existing_run(
+    *, run_id: str | None, user_id: str, db: Any, prepared: Any
+) -> tuple[str, str]:
     """校验恢复运行存在且属于当前用户与会话。"""
     if not run_id:
         raise ApiError(ERR_SESSION_PARAM, "重连缺少 X-Agent-Run-Id", status=400)
@@ -69,22 +71,27 @@ async def _resolve_existing_run(*, run_id: str | None, user_id: str, db: Any, pr
             AgentRun.session_id == prepared.chat_session.id,
         )
     )
-    if result.scalar_one_or_none() is None:
+    run = result.scalar_one_or_none()
+    if run is None:
         raise ApiError(ERR_SESSION_NOT_FOUND, "调研运行不存在或无权访问", status=404)
-    return run_id
+    return run_id, str(run.status)
 
 
 async def _resume_events(
     *,
     agent_run_id: str,
+    run_status: str,
     store: sse_event_service.SSEEventStore,
     replay_from: int,
     heartbeat_seconds: int,
 ) -> Any:
     """尾随已有运行的事件，不启动新调研、不重复落库。"""
     last_emitted_id = replay_from
+    terminal_status = run_status in {"done", "failed"}
     while True:
         records = await store.after(agent_run_id, last_emitted_id)
+        if not records and terminal_status:
+            return
         if records:
             for record in records:
                 if int(record["id"]) <= last_emitted_id:
@@ -134,12 +141,13 @@ async def ask_stream(
     store = sse_event_service.get_event_store(settings)
 
     if is_resume:
-        agent_run_id = await _resolve_existing_run(
+        agent_run_id, run_status = await _resolve_existing_run(
             run_id=run_id_header, user_id=user_id, db=db, prepared=prepared
         )
         return StreamingResponse(
             _resume_events(
                 agent_run_id=agent_run_id,
+                run_status=run_status,
                 store=store,
                 replay_from=replay_from,
                 heartbeat_seconds=settings.sse_heartbeat_seconds,
@@ -161,6 +169,12 @@ async def ask_stream(
         await queue.put(record)
 
     try:
+        await ask_service.register_stream_run(
+            prepared=prepared,
+            agent_run_id=agent_run_id,
+            user_id=user_id,
+            db=db,
+        )
         await publish(
             "started",
             {
@@ -206,8 +220,12 @@ async def ask_stream(
             )
         except asyncio.CancelledError:
             logger.info("流式问答已取消", extra=safe_extra(agent_run_id=agent_run_id))
+            with suppress(Exception):
+                await ask_service.mark_run_failed(agent_run_id=agent_run_id, user_id=user_id, db=db)
             raise
         except ApiError as exc:
+            with suppress(Exception):
+                await ask_service.mark_run_failed(agent_run_id=agent_run_id, user_id=user_id, db=db)
             await publish(
                 "error",
                 {
@@ -221,6 +239,8 @@ async def ask_stream(
                 "流式问答执行失败",
                 extra=safe_extra(agent_run_id=agent_run_id, reason=type(exc).__name__),
             )
+            with suppress(Exception):
+                await ask_service.mark_run_failed(agent_run_id=agent_run_id, user_id=user_id, db=db)
             await publish(
                 "error",
                 {
