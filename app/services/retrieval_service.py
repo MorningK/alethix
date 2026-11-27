@@ -10,15 +10,26 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import dataclass
 
 from app.core.config import Settings, get_settings
 from app.core.errors import ERR_LLM_UNAVAILABLE, ERR_VECTORDB_UNAVAILABLE, ApiError
 from app.core.logging import get_logger, safe_extra
+from app.db import redis as redis_db
 from app.services import qdrant_service
 from app.services.embedding_service import embed_texts
 
 logger = get_logger(__name__)
+
+
+def _query_cache_key(query: str, settings: Settings) -> str:
+    return redis_db.key_embedding_cache(
+        query,
+        embedding_model=settings.embedding_model,
+        embedding_base_url=settings.resolved_embedding_base_url,
+        embedding_dim=settings.embedding_dim,
+    )
 
 
 @dataclass(frozen=True)
@@ -49,7 +60,29 @@ async def search(
     query_filter = qdrant_service.build_filter(user_id, document_ids)
 
     try:
-        vectors = await embed_texts([query], s)
+        cached = None
+        try:
+            raw = await redis_db.get_redis().get(_query_cache_key(query, s))
+            if raw:
+                candidate = json.loads(raw)
+                if isinstance(candidate, list) and candidate:
+                    cached = [float(value) for value in candidate]
+        except Exception:  # noqa: BLE001
+            cached = None
+
+        if cached is not None:
+            vectors = [cached]
+        else:
+            vectors = await embed_texts([query], s)
+            if vectors:
+                try:
+                    await redis_db.get_redis().set(
+                        _query_cache_key(query, s),
+                        json.dumps(vectors[0]),
+                        ex=s.agent_embedding_cache_ttl_seconds,
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
     except Exception as exc:  # noqa: BLE001
         logger.warning("查询向量化失败", extra=safe_extra(reason=type(exc).__name__))
         raise ApiError(

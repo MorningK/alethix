@@ -40,9 +40,22 @@ class SufficiencyDecision(BaseModel):
     reason: str = Field(description="判断理由")
 
 
+class CitationInput(BaseModel):
+    """模型给出的引用候选；quote 仅作参考，服务层会从原文重建。"""
+
+    document_id: str = ""
+    chunk_id: str
+    filename: str = ""
+    page: int | None = None
+    section: str | None = None
+    quote: str = ""
+
+
 class FinalAnswerOutput(BaseModel):
     """NODE-5 final_answer 输出。"""
 
     answer: str = Field(description="最终回答，结构化、基于证据、含引用标记")
     confidence: Literal["high", "medium", "low"]
-    citations: list[dict] = Field(default_factory=list, description="引用的 chunk_id 与原文摘录")
+    citations: list[CitationInput] = Field(
+        default_factory=list, description="引用的 chunk_id 与原文摘录"
+    )
