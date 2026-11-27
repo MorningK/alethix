@@ -22,6 +22,7 @@ export function CitationList({ citations, defaultOpen = false }: CitationListPro
   return (
     <Collapse
       ghost
+      className="paper-citations"
       defaultActiveKey={defaultOpen ? ['citations'] : []}
       items={[
         {
@@ -32,10 +33,10 @@ export function CitationList({ citations, defaultOpen = false }: CitationListPro
               {citations.map((citation, index) => (
                 <div
                   key={citation.chunk_id}
-                  className="flex flex-col gap-1 rounded-md border border-slate-100 bg-slate-50 px-4 py-3"
+                  className="paper-citation flex flex-col gap-1 px-4 py-3"
                 >
                   <div className="flex flex-wrap items-center gap-2">
-                    <Typography.Text className="text-brand text-xs font-medium">
+                    <Typography.Text className="paper-citation-name text-xs font-medium">
                       [{index + 1}] {citation.filename}
                     </Typography.Text>
                     {citation.page !== null && (

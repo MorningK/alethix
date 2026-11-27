@@ -21,7 +21,7 @@ export function ProcessingList({ documents, statusById }: ProcessingListProps) {
           <Tag color="processing">{documents.length}</Tag>
         </div>
       }
-      className="shadow-sm"
+      className="paper-card"
     >
       <div className="flex flex-col gap-3">
         {documents.map((doc) => {
@@ -31,7 +31,7 @@ export function ProcessingList({ documents, statusById }: ProcessingListProps) {
           return (
             <div
               key={doc.document_id}
-              className="bg-canvas flex flex-col gap-2 rounded-lg px-4 py-3"
+              className="paper-processing-item flex flex-col gap-2 px-4 py-3"
             >
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="flex min-w-0 items-center gap-3">

@@ -1,4 +1,5 @@
 import { Button, Typography } from 'antd';
+import { BookOpen } from 'lucide-react';
 import { useLocation, useNavigate } from 'react-router-dom';
 
 const NAV_ITEMS = [
@@ -12,23 +13,34 @@ export function TopNav() {
   const location = useLocation();
 
   return (
-    <header className="fixed inset-x-0 top-0 z-50 flex h-14 items-center justify-between border-b border-black/5 bg-white px-6">
-      <div className="flex items-center gap-2">
-        <Typography.Text strong className="text-base">
-          Alethix
-        </Typography.Text>
-        <Typography.Text type="secondary" className="text-sm">
-          探赜
-        </Typography.Text>
-      </div>
+    <header className="paper-topnav fixed inset-x-0 top-0 z-50 flex h-14 items-center justify-between px-6">
+      <button
+        type="button"
+        className="flex cursor-pointer items-center gap-3 border-0 bg-transparent p-0"
+        onClick={() => navigate('/documents')}
+        aria-label="返回文档管理"
+      >
+        <span className="paper-brand-mark">
+          <BookOpen size={17} strokeWidth={1.8} />
+        </span>
+        <span className="paper-brand flex items-baseline gap-2">
+          <Typography.Text strong className="text-ink text-base">
+            Alethix · 探赜
+          </Typography.Text>
+          <Typography.Text type="secondary" className="text-xs">
+            Evidence-first reading
+          </Typography.Text>
+        </span>
+      </button>
 
-      <nav className="flex items-center gap-1">
+      <nav className="flex items-center gap-1" aria-label="主导航">
         {NAV_ITEMS.map((item) => {
           const active = location.pathname.startsWith(item.key);
           return (
             <Button
               key={item.key}
               type={active ? 'primary' : 'text'}
+              className="paper-nav-button"
               onClick={() => navigate(item.key)}
             >
               {item.label}

@@ -14,22 +14,30 @@
  * 而下面这些变量由本文件的原生 CSS（body 等）直接使用，必须强制输出。 */
 @theme static {
   --font-sans: 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+  --font-heading: 'Cormorant Garamond', 'Noto Serif SC', 'Songti SC', Georgia, serif;
 
-  /* 主色 */
-  --color-brand: #2563eb;
-  --color-brand-dark: #1d4ed8;
-  --color-brand-light: #3b82f6;
+  /* 主色：琥珀棕 */
+  --color-brand: #b45309;
+  --color-brand-dark: #92400e;
+  --color-brand-light: #d97706;
 
-  /* 背景与文字 */
-  --color-canvas: #f7f8fa;
+  /* 背景与文字：暖白纸张 */
+  --color-canvas: #fffdf7;
   --color-surface: #ffffff;
-  --color-ink: #1f2329;
-  --color-ink-muted: #646a73;
+  --color-surface-muted: #f8f2e4;
+  --color-surface-warm: #fffbeb;
+  --color-paper-line: #efe5d0;
+  --color-ink: #3b2f2f;
+  --color-ink-muted: #6b5b4b;
+  --color-ink-subtle: #a79880;
 
   /* 功能色 */
-  --color-success: #00b42a;
-  --color-warning: #ff7d00;
-  --color-danger: #f53f3f;
+  --color-success: #059669;
+  --color-success-soft: #e7f5ef;
+  --color-warning: #d97706;
+  --color-danger: #dc2626;
+  --color-danger-soft: #fdeaea;
+  --color-code-bg: #f8f2e4;
 }
 
 html,
@@ -41,6 +49,7 @@ body,
 body {
   margin: 0;
   background-color: var(--color-canvas);
+  background-image: radial-gradient(circle at 12% -10%, var(--color-surface-warm), transparent 38%);
   color: var(--color-ink);
   font-family: var(--font-sans);
   font-size: 14px;
@@ -68,5 +77,5 @@ body {
   overflow-x: auto;
   padding: 8px;
   border-radius: 6px;
-  background: #f1f5f9;
+  background: var(--color-code-bg);
 }

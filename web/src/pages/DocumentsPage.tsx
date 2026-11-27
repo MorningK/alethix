@@ -11,8 +11,9 @@ export function DocumentsPage() {
 
   return (
     <div className="flex flex-col gap-5">
-      <div className="flex flex-col gap-1">
-        <Typography.Title level={4} className="text-ink mb-0">
+      <div className="paper-page-header flex flex-col gap-1">
+        <span className="paper-eyebrow">Knowledge Base</span>
+        <Typography.Title level={4} className="paper-title text-ink mt-2 mb-0">
           文档管理
         </Typography.Title>
         <Typography.Text type="secondary">
@@ -28,7 +29,7 @@ export function DocumentsPage() {
       <UploadCard onUploaded={manager.onUploaded} />
       <ProcessingList documents={manager.processingDocs} statusById={manager.statusById} />
 
-      <Card className="shadow-sm">
+      <Card className="paper-card">
         <DocumentTable
           documents={manager.documents}
           loading={manager.loading}
@@ -45,7 +46,7 @@ export function DocumentsPage() {
           onDelete={manager.onDelete}
         />
 
-        <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-black/5 pt-4">
+        <div className="paper-selection-bar mt-4 flex flex-wrap items-center justify-between gap-3 border-t pt-4">
           <Typography.Text type="secondary">
             已选 {manager.selectedIds.length} 篇就绪文档；未选择时将在全部就绪文档中检索
           </Typography.Text>

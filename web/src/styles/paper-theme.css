@@ -1,0 +1,359 @@
+/* 纸感主题：AntD token 之外的局部组件覆盖，与 index.css 的 @theme 变量共用。 */
+
+.paper-shell {
+  min-height: 100%;
+  background-image: radial-gradient(circle at 12% -10%, var(--color-surface-warm), transparent 38%);
+}
+
+.paper-topnav {
+  border-bottom: 1px solid var(--color-paper-line);
+  background: var(--color-surface);
+  box-shadow: 0 1px 2px rgba(59, 47, 47, 0.04);
+}
+
+.paper-brand {
+  font-family: var(--font-heading);
+  letter-spacing: 0.01em;
+}
+
+.paper-brand-mark {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border-radius: 8px;
+  background: linear-gradient(135deg, var(--color-brand), var(--color-brand-light));
+  color: var(--color-surface);
+  box-shadow: 0 1px 2px rgba(59, 47, 47, 0.12);
+}
+
+.paper-nav-button.ant-btn {
+  border-radius: 8px;
+  font-weight: 600;
+}
+
+.paper-nav-button.ant-btn-text {
+  color: var(--color-ink-muted);
+}
+
+.paper-nav-button.ant-btn-text:hover {
+  background: var(--color-surface-warm);
+  color: var(--color-brand);
+}
+
+.paper-page-header {
+  padding-bottom: 4px;
+}
+
+.paper-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--color-brand);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.paper-eyebrow::before {
+  width: 18px;
+  height: 2px;
+  border-radius: 999px;
+  background: var(--color-brand);
+  content: '';
+}
+
+.paper-title {
+  font-family: var(--font-heading);
+  font-size: 24px;
+  font-weight: 600;
+}
+
+.paper-card.ant-card {
+  border-color: var(--color-paper-line);
+  border-radius: 14px;
+  background: var(--color-surface);
+  box-shadow: 0 1px 2px rgba(59, 47, 47, 0.06);
+}
+
+.paper-card.ant-card > .ant-card-head {
+  border-bottom-color: var(--color-paper-line);
+  font-family: var(--font-heading);
+  font-weight: 600;
+}
+
+.paper-upload-card.ant-card > .ant-card-body {
+  padding: 0;
+}
+
+.paper-upload-zone {
+  border: 0;
+}
+
+.paper-upload-zone .ant-upload-drag {
+  border-color: var(--color-paper-line);
+  border-radius: 14px;
+  background: linear-gradient(180deg, var(--color-surface), var(--color-surface-warm));
+  transition:
+    border-color 150ms ease,
+    background 150ms ease;
+}
+
+.paper-upload-zone .ant-upload-drag:hover {
+  border-color: var(--color-brand-light);
+  background: var(--color-surface-warm);
+}
+
+.paper-upload-icon {
+  display: grid;
+  width: 48px;
+  height: 48px;
+  place-items: center;
+  border-radius: 12px;
+  background: var(--color-surface-warm);
+  color: var(--color-brand);
+}
+
+.paper-upload-footer {
+  border-top-color: var(--color-paper-line);
+  color: var(--color-ink-muted);
+}
+
+.paper-processing-item {
+  border: 1px solid var(--color-paper-line);
+  border-radius: 10px;
+  background: var(--color-surface-muted);
+}
+
+.paper-table .ant-table-thead > tr > th {
+  border-bottom-color: var(--color-paper-line);
+  font-weight: 600;
+}
+
+.paper-table .ant-table-tbody > tr > td {
+  border-bottom-color: var(--color-paper-line);
+}
+
+.paper-table .ant-table-tbody > tr.ant-table-row:hover > td {
+  background: var(--color-surface-warm);
+}
+
+.paper-selection-bar {
+  border-top-color: var(--color-paper-line);
+  color: var(--color-ink-muted);
+}
+
+.paper-status.ant-tag {
+  margin: 0;
+  border: 0;
+  border-radius: 999px;
+  font-weight: 600;
+}
+
+.paper-status--uploaded {
+  background: var(--color-surface-muted);
+  color: var(--color-ink-muted);
+}
+.paper-status--parsing,
+.paper-status--chunking,
+.paper-status--embedding {
+  background: var(--color-surface-warm);
+  color: var(--color-brand);
+}
+.paper-status--ready {
+  background: var(--color-success-soft);
+  color: var(--color-success);
+}
+.paper-status--failed {
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
+}
+
+.paper-chat-shell {
+  gap: 16px;
+}
+
+.paper-session-rail {
+  width: 232px;
+  flex: 0 0 232px;
+  border: 1px solid var(--color-paper-line);
+  border-radius: 14px;
+  background: var(--color-surface);
+  box-shadow: 0 1px 2px rgba(59, 47, 47, 0.06);
+}
+
+.paper-session-item {
+  width: 100%;
+  padding: 12px;
+  border-left: 3px solid transparent;
+  border-radius: 0 10px 10px 0;
+  text-align: left;
+  transition:
+    background 150ms ease,
+    border-color 150ms ease;
+}
+
+.paper-session-item:hover {
+  background: var(--color-surface-warm);
+}
+
+.paper-session-item.is-active {
+  border-left-color: var(--color-brand);
+  background: var(--color-surface-warm);
+}
+
+.paper-scope-card.ant-card {
+  border-color: var(--color-paper-line);
+  background: var(--color-surface);
+}
+
+.paper-scope-tag.ant-tag {
+  margin: 0;
+  border-color: var(--color-paper-line);
+  border-radius: 999px;
+  background: var(--color-surface-warm);
+  color: var(--color-brand-dark);
+}
+
+.paper-chat-panel {
+  border-color: var(--color-paper-line);
+  border-radius: 14px;
+  background: var(--color-surface);
+  box-shadow: 0 1px 2px rgba(59, 47, 47, 0.06);
+}
+
+.paper-hero {
+  border: 1px solid var(--color-paper-line);
+  border-radius: 14px;
+  background: linear-gradient(
+    120deg,
+    var(--color-surface),
+    var(--color-surface) 55%,
+    var(--color-surface-warm)
+  );
+  color: var(--color-ink);
+}
+
+.paper-hero .ant-typography {
+  color: var(--color-ink);
+}
+
+.paper-hero-subtitle {
+  color: var(--color-ink-muted) !important;
+}
+
+.paper-research-card.ant-card {
+  width: 340px;
+  flex: 0 0 340px;
+  border-color: var(--color-paper-line);
+  border-radius: 14px;
+  background: var(--color-surface-muted);
+  box-shadow: 0 1px 2px rgba(59, 47, 47, 0.06);
+}
+
+.paper-research-toggle.ant-btn {
+  border-color: var(--color-paper-line);
+  background: var(--color-surface);
+  color: var(--color-brand-dark);
+}
+
+.paper-composer {
+  border-radius: 10px;
+}
+
+.paper-composer .ant-input,
+.paper-composer textarea {
+  background: var(--color-surface);
+  color: var(--color-ink);
+}
+
+.paper-avatar-user {
+  background: var(--color-brand);
+  color: var(--color-surface);
+}
+
+.paper-avatar-ai {
+  background: var(--color-brand-dark);
+  color: var(--color-surface);
+}
+
+.paper-answer {
+  gap: 12px;
+}
+
+.paper-confidence.ant-tag {
+  border-color: var(--color-paper-line);
+  border-radius: 999px;
+  background: var(--color-surface-warm);
+  color: var(--color-brand-dark);
+  font-weight: 600;
+}
+
+.paper-stop-alert.ant-alert {
+  border-color: var(--color-paper-line);
+  border-radius: 10px;
+  background: var(--color-surface-warm);
+}
+
+.paper-citations .ant-collapse-header {
+  color: var(--color-brand-dark);
+  font-weight: 600;
+}
+
+.paper-citation {
+  border-color: var(--color-paper-line);
+  border-radius: 10px;
+  background: var(--color-surface-muted);
+}
+
+.paper-citation-name {
+  color: var(--color-brand-dark) !important;
+}
+
+.paper-research-chain .ant-thought-chain-item {
+  border-radius: 10px;
+}
+
+.paper-research-chain .research-chain-content {
+  color: var(--color-ink-muted);
+}
+
+.paper-empty.ant-empty {
+  color: var(--color-ink-muted);
+}
+
+.paper-drawer .ant-drawer-content {
+  background: var(--color-surface);
+}
+
+.paper-drawer .ant-drawer-header {
+  border-bottom-color: var(--color-paper-line);
+}
+
+.paper-drawer .ant-drawer-title {
+  font-family: var(--font-heading);
+}
+
+:where(button, a, input, textarea, select):focus-visible {
+  outline: 2px solid var(--color-brand-light);
+  outline-offset: 2px;
+}
+
+@media (max-width: 767px) {
+  .paper-title {
+    font-size: 20px;
+  }
+
+  .paper-research-card.ant-card {
+    width: 100%;
+    flex-basis: auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .paper-session-item,
+  .paper-upload-zone .ant-upload-drag {
+    transition: none;
+  }
+}

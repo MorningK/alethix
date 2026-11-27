@@ -47,7 +47,7 @@ export function UploadCard({ onUploaded }: UploadCardProps) {
   };
 
   return (
-    <Card className="shadow-sm" styles={{ body: { padding: 0 } }}>
+    <Card className="paper-card paper-upload-card" styles={{ body: { padding: 0 } }}>
       <Upload.Dragger
         multiple
         accept=".pdf,.md,.txt"
@@ -60,10 +60,10 @@ export function UploadCard({ onUploaded }: UploadCardProps) {
             onError: (error) => onError?.(error as Error),
           });
         }}
-        className="border-brand/40 bg-brand/5 hover:border-brand hover:bg-brand/10 rounded-lg border-dashed py-8 transition-colors"
+        className="paper-upload-zone rounded-lg py-8"
       >
         <div className="flex flex-col items-center gap-3">
-          <div className="bg-brand/10 text-brand flex size-12 items-center justify-center rounded-xl">
+          <div className="paper-upload-icon flex size-12 items-center justify-center">
             <CloudUpload size={24} strokeWidth={1.8} />
           </div>
           <div className="flex flex-col gap-1">
@@ -76,7 +76,7 @@ export function UploadCard({ onUploaded }: UploadCardProps) {
           </div>
         </div>
       </Upload.Dragger>
-      <div className="text-ink-muted border-t border-black/5 px-5 py-3 text-xs">
+      <div className="paper-upload-footer border-t px-5 py-3 text-xs">
         上传后自动解析、切片并向量化；处理中的文档会在下方实时追踪状态。
       </div>
     </Card>
