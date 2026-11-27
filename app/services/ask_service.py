@@ -440,7 +440,7 @@ async def mark_run_failed(
     """把预登记运行标记为失败；失败本身不阻断错误事件推送。"""
     try:
         run = await db.get(AgentRun, agent_run_id)
-        if run is not None and run.user_id == user_id:
+        if run is not None and run.user_id == user_id and run.status == "running":
             run.status = "failed"
             run.stop_reason = "internal_error"
             await db.commit()

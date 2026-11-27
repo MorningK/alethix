@@ -74,6 +74,18 @@ class PrimaryOnceThenBrokenStore:
         return None
 
 
+async def test_resilient_store_bounds_primary_sequences():
+    store = ResilientSSEEventStore(
+        primary=InMemorySSEEventStore(max_events=100),
+        fallback=InMemorySSEEventStore(max_events=100),
+        max_sequences=2,
+    )
+    for index in range(5):
+        await store.append(f"run-{index}", "started", {})
+
+    assert len(store._primary_sequences) <= 2
+
+
 async def test_resilient_store_continues_sequence_after_degradation():
     store = ResilientSSEEventStore(
         primary=PrimaryOnceThenBrokenStore(), fallback=InMemorySSEEventStore(max_events=100)

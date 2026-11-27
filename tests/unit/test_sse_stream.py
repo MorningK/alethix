@@ -187,18 +187,36 @@ def test_stream_registers_run_before_start(stream_env):
 
 
 class EmptyReplayStore:
+    def __init__(self, terminal: bool = False) -> None:
+        self.terminal = terminal
+
     async def after(self, agent_run_id, event_id):
         return []
 
+    async def is_terminal(self, agent_run_id):
+        return self.terminal
 
-def test_completed_run_with_no_replayable_events_closes_stream():
+
+def test_reconnect_waits_when_terminal_event_not_published():
+    async def _first_chunk():
+        generator = ask_api._resume_events(
+            agent_run_id=RUN_ID,
+            store=EmptyReplayStore(terminal=False),
+            replay_from=0,
+            heartbeat_seconds=0,
+        )
+        return await anext(generator)
+
+    assert asyncio.run(_first_chunk()) == ": ping\n\n"
+
+
+def test_terminal_marker_with_no_replayable_events_closes_stream():
     async def _collect():
         return [
             chunk
             async for chunk in ask_api._resume_events(
                 agent_run_id=RUN_ID,
-                run_status="done",
-                store=EmptyReplayStore(),
+                store=EmptyReplayStore(terminal=True),
                 replay_from=0,
                 heartbeat_seconds=0,
             )

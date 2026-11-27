@@ -29,6 +29,10 @@ class SSEEventStore(Protocol):
 
     async def clear(self, agent_run_id: str) -> None: ...
 
+    async def mark_terminal(self, agent_run_id: str) -> None: ...
+
+    async def is_terminal(self, agent_run_id: str) -> bool: ...
+
 
 class InMemorySSEEventStore:
     """测试环境使用的内存事件存储。"""
@@ -39,6 +43,7 @@ class InMemorySSEEventStore:
         self._events: dict[str, list[EventRecord]] = {}
         self._sequence: dict[str, int] = {}
         self._expires: dict[str, float] = {}
+        self._terminals: dict[str, float] = {}
 
     def _purge_expired(self) -> None:
         now = time.monotonic()
@@ -71,6 +76,19 @@ class InMemorySSEEventStore:
         self._events.pop(agent_run_id, None)
         self._sequence.pop(agent_run_id, None)
         self._expires.pop(agent_run_id, None)
+        self._terminals.pop(agent_run_id, None)
+
+    async def mark_terminal(self, agent_run_id: str) -> None:
+        self._terminals[agent_run_id] = time.monotonic() + self._ttl
+
+    async def is_terminal(self, agent_run_id: str) -> bool:
+        deadline = self._terminals.get(agent_run_id)
+        if deadline is None:
+            return False
+        if deadline <= time.monotonic():
+            self._terminals.pop(agent_run_id, None)
+            return False
+        return True
 
     def set_sequence(self, agent_run_id: str, sequence: int) -> None:
         """接力主存储的事件编号，避免降级后编号重复。"""
@@ -118,17 +136,34 @@ class RedisSSEEventStore:
         await redis_db.get_redis().delete(
             redis_db.key_sse_events(agent_run_id),
             redis_db.key_sse_events_seq(agent_run_id),
+            redis_db.key_sse_terminal(agent_run_id),
         )
+
+    async def mark_terminal(self, agent_run_id: str) -> None:
+        await redis_db.get_redis().set(redis_db.key_sse_terminal(agent_run_id), "1", ex=self._ttl)
+
+    async def is_terminal(self, agent_run_id: str) -> bool:
+        return bool(await redis_db.get_redis().exists(redis_db.key_sse_terminal(agent_run_id)))
 
 
 class ResilientSSEEventStore:
     """Redis 故障时回退到进程内存；降级期间跨 worker 重放不可用。"""
 
-    def __init__(self, *, primary: SSEEventStore, fallback: SSEEventStore) -> None:
+    def __init__(
+        self,
+        *,
+        primary: SSEEventStore,
+        fallback: SSEEventStore,
+        ttl_seconds: int = 3600,
+        max_sequences: int = 100,
+    ) -> None:
         self._primary = primary
         self._fallback = fallback
         self._degraded = False
         self._primary_sequences: dict[str, int] = {}
+        self._sequence_expires: dict[str, float] = {}
+        self._sequence_ttl = ttl_seconds
+        self._max_sequences = max_sequences
 
     @property
     def degraded(self) -> bool:
@@ -142,16 +177,34 @@ class ResilientSSEEventStore:
             )
         self._degraded = True
 
+    def _prune_sequences(self) -> None:
+        now = time.monotonic()
+        expired = [run_id for run_id, deadline in self._sequence_expires.items() if deadline <= now]
+        for run_id in expired:
+            self._primary_sequences.pop(run_id, None)
+            self._sequence_expires.pop(run_id, None)
+        while len(self._primary_sequences) > self._max_sequences:
+            oldest = next(iter(self._primary_sequences))
+            self._primary_sequences.pop(oldest, None)
+            self._sequence_expires.pop(oldest, None)
+
+    def _record_primary_sequence(self, agent_run_id: str, sequence: int) -> None:
+        self._prune_sequences()
+        self._primary_sequences[agent_run_id] = max(
+            self._primary_sequences.get(agent_run_id, 0), sequence
+        )
+        self._sequence_expires[agent_run_id] = time.monotonic() + self._sequence_ttl
+        self._prune_sequences()
+
     async def append(self, agent_run_id: str, event: str, data: dict[str, Any]) -> EventRecord:
         if not self._degraded:
             try:
                 record = await self._primary.append(agent_run_id, event, data)
-                self._primary_sequences[agent_run_id] = max(
-                    self._primary_sequences.get(agent_run_id, 0), int(record["id"])
-                )
+                self._record_primary_sequence(agent_run_id, int(record["id"]))
                 return record
             except Exception as exc:  # noqa: BLE001
                 self._degrade("append", exc)
+        self._prune_sequences()
         set_sequence = getattr(self._fallback, "set_sequence", None)
         if callable(set_sequence):
             set_sequence(agent_run_id, self._primary_sequences.get(agent_run_id, 0))
@@ -167,6 +220,7 @@ class ResilientSSEEventStore:
 
     async def clear(self, agent_run_id: str) -> None:
         self._primary_sequences.pop(agent_run_id, None)
+        self._sequence_expires.pop(agent_run_id, None)
         if not self._degraded:
             try:
                 await self._primary.clear(agent_run_id)
@@ -174,6 +228,23 @@ class ResilientSSEEventStore:
             except Exception as exc:  # noqa: BLE001
                 self._degrade("clear", exc)
         await self._fallback.clear(agent_run_id)
+
+    async def mark_terminal(self, agent_run_id: str) -> None:
+        if not self._degraded:
+            try:
+                await self._primary.mark_terminal(agent_run_id)
+                return
+            except Exception as exc:  # noqa: BLE001
+                self._degrade("mark_terminal", exc)
+        await self._fallback.mark_terminal(agent_run_id)
+
+    async def is_terminal(self, agent_run_id: str) -> bool:
+        if not self._degraded:
+            try:
+                return await self._primary.is_terminal(agent_run_id)
+            except Exception as exc:  # noqa: BLE001
+                self._degrade("is_terminal", exc)
+        return await self._fallback.is_terminal(agent_run_id)
 
 
 _store: SSEEventStore | None = None
@@ -197,6 +268,8 @@ def get_event_store(settings: Settings | None = None) -> SSEEventStore:
             fallback=InMemorySSEEventStore(
                 max_events=s.sse_max_events, ttl_seconds=s.sse_event_ttl_seconds
             ),
+            ttl_seconds=s.sse_event_ttl_seconds,
+            max_sequences=s.sse_max_events,
         )
     return _store
 

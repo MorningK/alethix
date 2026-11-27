@@ -80,17 +80,15 @@ async def _resolve_existing_run(
 async def _resume_events(
     *,
     agent_run_id: str,
-    run_status: str,
     store: sse_event_service.SSEEventStore,
     replay_from: int,
     heartbeat_seconds: int,
 ) -> Any:
     """尾随已有运行的事件，不启动新调研、不重复落库。"""
     last_emitted_id = replay_from
-    terminal_status = run_status in {"done", "failed"}
     while True:
         records = await store.after(agent_run_id, last_emitted_id)
-        if not records and terminal_status:
+        if not records and await store.is_terminal(agent_run_id):
             return
         if records:
             for record in records:
@@ -99,6 +97,7 @@ async def _resume_events(
                 yield sse_event_service.format_event(record)
                 last_emitted_id = int(record["id"])
                 if record["event"] in _TERMINAL_EVENTS:
+                    await store.mark_terminal(agent_run_id)
                     return
             continue
         yield ": ping\n\n"
@@ -141,13 +140,12 @@ async def ask_stream(
     store = sse_event_service.get_event_store(settings)
 
     if is_resume:
-        agent_run_id, run_status = await _resolve_existing_run(
+        agent_run_id, _ = await _resolve_existing_run(
             run_id=run_id_header, user_id=user_id, db=db, prepared=prepared
         )
         return StreamingResponse(
             _resume_events(
                 agent_run_id=agent_run_id,
-                run_status=run_status,
                 store=store,
                 replay_from=replay_from,
                 heartbeat_seconds=settings.sse_heartbeat_seconds,
@@ -218,10 +216,14 @@ async def ask_stream(
                     "citations": [item.model_dump(mode="json") for item in research.citations],
                 },
             )
+            with suppress(Exception):
+                await store.mark_terminal(agent_run_id)
         except asyncio.CancelledError:
             logger.info("流式问答已取消", extra=safe_extra(agent_run_id=agent_run_id))
             with suppress(Exception):
                 await ask_service.mark_run_failed(agent_run_id=agent_run_id, user_id=user_id, db=db)
+            with suppress(Exception):
+                await store.mark_terminal(agent_run_id)
             raise
         except ApiError as exc:
             with suppress(Exception):
@@ -234,6 +236,8 @@ async def ask_stream(
                     "trace_id": trace_id_var.get() or "",
                 },
             )
+            with suppress(Exception):
+                await store.mark_terminal(agent_run_id)
         except Exception as exc:  # noqa: BLE001
             logger.exception(
                 "流式问答执行失败",
@@ -249,6 +253,8 @@ async def ask_stream(
                     "trace_id": trace_id_var.get() or "",
                 },
             )
+            with suppress(Exception):
+                await store.mark_terminal(agent_run_id)
         finally:
             await queue.put(None)
 
