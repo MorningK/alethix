@@ -239,7 +239,12 @@ EMBEDDING_BASE_URL=http://localhost:8080/v1   # 只改这个
 EMBEDDING_MODEL=BAAI/bge-m3
 EMBEDDING_DIM=1024                            # bge-m3 是 1024 维，非 1536
 QDRANT_COLLECTION=document_chunks_bgem3       # 必须换一个集合，禁止与 1536 维混用
+TEI_SERVED_MODEL_NAME=BAAI/bge-m3             # 必须与 EMBEDDING_MODEL 一致，否则 TEI 告警
 ```
+
+`TEI_SERVED_MODEL_NAME` 会作为 TEI OpenAI 兼容端点的 `served_model_name`，必须与客户端
+`EMBEDDING_MODEL` 完全一致；若两者不一致，TEI 会对每个 `/v1/embeddings` 请求打印
+`model=... has not been found` 告警（向量结果仍可正常返回）。
 
 本地 TEI 默认**无需鉴权**。`docker-compose.yml` 通过可选的 `tei.env` 文件传 `API_KEY`：文件不存在时
 完全不传，避免空字符串被 TEI 当作“启用鉴权但 key 为空”而导致 `/v1/embeddings` 返回 401。
