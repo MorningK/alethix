@@ -8,13 +8,17 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.errors import ERR_SESSION_PARAM, ApiError
+from app.core.errors import ERR_SESSION_NOT_FOUND, ERR_SESSION_PARAM, ApiError
+from app.models.agent import Answer
+from app.models.agent import Citation as CitationORM
 from app.models.document import Document
-from app.models.session import Session
-from app.schemas.session import SessionCreateRequest, SessionResponse
+from app.models.session import Message, Session
+from app.schemas.common import Page
+from app.schemas.document import Citation as CitationDTO
+from app.schemas.session import MessageItem, SessionCreateRequest, SessionResponse
 
 
 def _normalize_document_ids(document_ids: list[str], max_count: int = 20) -> list[str]:
@@ -87,6 +91,85 @@ async def create_session(
     )
 
 
-async def list_messages(*, session_id: str, page: int = 1, page_size: int = 20) -> dict:
-    """拉取会话历史（API-8），按时间正序。待 M4 实现。"""
-    raise NotImplementedError("API-8 会话历史：待 M4 实现")
+async def list_messages(
+    *,
+    session_id: str,
+    user_id: str,
+    db: AsyncSession,
+    page: int = 1,
+    page_size: int = 20,
+) -> Page[MessageItem]:
+    """拉取会话历史（API-8），按 seq 正序并批量装配答案与引用。"""
+    try:
+        normalized = str(uuid.UUID(str(session_id)))
+    except (ValueError, AttributeError, TypeError) as exc:
+        raise ApiError(ERR_SESSION_PARAM, "session_id 不是合法 UUID", status=400) from exc
+    if page < 1 or page_size < 1 or page_size > 100:
+        raise ApiError(ERR_SESSION_PARAM, "分页参数超出范围", status=400)
+
+    owned = await db.execute(
+        select(Session.id).where(
+            Session.id == normalized,
+            Session.user_id == user_id,
+            Session.deleted_at.is_(None),
+        )
+    )
+    if owned.scalar_one_or_none() is None:
+        raise ApiError(ERR_SESSION_NOT_FOUND, "会话不存在", status=404)
+
+    total_result = await db.execute(
+        select(func.count()).select_from(Message).where(Message.session_id == normalized)
+    )
+    total = int(total_result.scalar_one())
+
+    rows = await db.execute(
+        select(Message)
+        .where(Message.session_id == normalized)
+        .order_by(Message.seq.asc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
+    messages = list(rows.scalars().all())
+
+    run_ids = [str(item.agent_run_id) for item in messages if item.agent_run_id]
+    answers_by_run: dict[str, Answer] = {}
+    if run_ids:
+        answer_rows = await db.execute(select(Answer).where(Answer.agent_run_id.in_(run_ids)))
+        answers_by_run = {str(row.agent_run_id): row for row in answer_rows.scalars().all()}
+
+    answer_ids = [str(row.id) for row in answers_by_run.values()]
+    citations_by_answer: dict[str, list[CitationDTO]] = {}
+    if answer_ids:
+        citation_rows = await db.execute(
+            select(CitationORM)
+            .where(CitationORM.answer_id.in_(answer_ids))
+            .order_by(CitationORM.ordinal.asc())
+        )
+        for row in citation_rows.scalars().all():
+            citations_by_answer.setdefault(str(row.answer_id), []).append(
+                CitationDTO(
+                    document_id=str(row.document_id),
+                    chunk_id=str(row.chunk_id),
+                    filename=row.filename,
+                    page=row.page,
+                    section=row.section,
+                    quote=row.quote,
+                    score=row.score,
+                )
+            )
+
+    items: list[MessageItem] = []
+    for item in messages:
+        answer = answers_by_run.get(str(item.agent_run_id)) if item.agent_run_id else None
+        items.append(
+            MessageItem(
+                message_id=str(item.id),
+                role=item.role,
+                content=item.content,
+                created_at=item.created_at,
+                agent_run_id=str(item.agent_run_id) if item.agent_run_id else None,
+                confidence=answer.confidence if answer else None,
+                citations=citations_by_answer.get(str(answer.id), []) if answer else [],
+            )
+        )
+    return Page[MessageItem](items=items, total=total, page=page, page_size=page_size)

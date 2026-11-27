@@ -15,8 +15,11 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.memory import InMemorySaver
 
 from app.core.config import Settings, get_settings
+from app.core.logging import get_logger, safe_extra
 from app.schemas.document import Citation as CitationDTO
 from app.services.retrieval_service import RetrievedChunk
+
+logger = get_logger(__name__)
 
 
 @dataclass(frozen=True)
@@ -75,6 +78,7 @@ def build_run_config(
                 "last_new_chunk_count": 0,
                 "last_findings": [],
                 "last_conflicts": [],
+                "history_findings": [],
             },
         },
         "recursion_limit": rounds * 4 + 4,
@@ -111,9 +115,19 @@ async def init_checkpointer(settings: Settings | None = None) -> Any:
     from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
     # 表结构由 Alembic 迁移 0003 管理；此处不调用 setup()。
-    cm = AsyncPostgresSaver.from_conn_string(_psycopg_dsn(s))
-    _checkpointer = await cm.__aenter__()
-    _checkpointer_cm = cm
+    try:
+        cm = AsyncPostgresSaver.from_conn_string(_psycopg_dsn(s))
+        _checkpointer = await cm.__aenter__()
+        _checkpointer_cm = cm
+    except Exception as exc:  # noqa: BLE001
+        if s.app_env != "dev":
+            raise
+        logger.warning(
+            "PostgreSQL checkpointer 初始化失败，开发环境回退到内存实现",
+            extra=safe_extra(reason=type(exc).__name__),
+        )
+        _checkpointer_cm = None
+        _checkpointer = InMemorySaver()
     return _checkpointer
 
 

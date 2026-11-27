@@ -135,6 +135,7 @@ async def plan_queries(state: AgentState, config: RunnableConfig) -> dict:
     """NODE-1：规划本轮查询。"""
     deps = runtime.get_agent_deps(config)
     settings = deps.settings
+    metrics = runtime.get_metrics(config)
     iteration = int(state.get("iteration", 0)) + 1
 
     result = await deps.call_structured(
@@ -148,6 +149,7 @@ async def plan_queries(state: AgentState, config: RunnableConfig) -> dict:
                     findings=list(state.get("findings") or []),
                     missing_information=str(state.get("missing_information") or ""),
                     iteration=iteration,
+                    history_findings=list(metrics.get("history_findings") or []),
                 ),
             )
         ],
@@ -338,6 +340,7 @@ async def decide_next_step(state: AgentState, config: RunnableConfig) -> dict:
                         max_iterations=int(
                             state.get("max_iterations", settings.agent_max_iterations)
                         ),
+                        history_findings=list(metrics.get("history_findings") or []),
                     ),
                 )
             ],

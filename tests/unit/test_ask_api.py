@@ -17,6 +17,7 @@ from app.core.errors import (
 )
 from app.db.postgres import get_session
 from app.main import app
+from app.models.agent import AgentRun
 from app.models.session import Session
 from app.schemas.ask import AskRequest, AskResponse
 from app.services import agent_service, ask_service, retrieval_service
@@ -101,12 +102,6 @@ def test_ask_propagates_llm_error(client, monkeypatch):
     response = http.post("/api/v1/ask", headers=HEADERS, json=PAYLOAD)
     assert response.status_code == 503
     assert response.json()["error"]["code"] == "5032001"
-
-
-def test_ask_stream_still_placeholder(client):
-    http, _ = client
-    response = http.post("/api/v1/ask/stream", headers=HEADERS, json=PAYLOAD)
-    assert response.status_code == 501
 
 
 def test_validate_payload_rejects_bad_question():
@@ -204,6 +199,12 @@ async def test_persist_locks_session_and_sets_first_turn_title():
             self.execution_options = dict(stmt.get_execution_options())
             return SimpleNamespace(scalar_one_or_none=lambda: locked)
 
+        async def get(self, model, key):
+            return None
+
+        def add(self, row) -> None:
+            self.rows.append(row)
+
         def add_all(self, rows) -> None:
             self.rows = list(rows)
 
@@ -238,3 +239,30 @@ async def test_persist_locks_session_and_sets_first_turn_title():
     assert locked.title == question[:20]
     assert locked.message_count == 2
     assert [row.seq for row in db.rows[:2]] == [1, 2]
+
+
+async def test_mark_run_failed_does_not_overwrite_completed_run():
+    run = AgentRun(
+        id="c5d6e7f8-9a0b-4c1d-2e3f-4a5b6c7d8e9f",
+        session_id=SESSION_ID,
+        user_id=USER_ID,
+        question="主要风险有哪些？",
+        document_ids=[],
+        max_iterations=3,
+        status="done",
+    )
+    commits: list[bool] = []
+
+    class DoneDb:
+        async def get(self, model, key):
+            return run
+
+        async def commit(self):
+            commits.append(True)
+
+        async def rollback(self):
+            return None
+
+    await ask_service.mark_run_failed(agent_run_id=run.id, user_id=USER_ID, db=DoneDb())
+    assert run.status == "done"
+    assert commits == []

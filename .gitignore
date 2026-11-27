@@ -108,6 +108,7 @@ docs/_build/
 .idea/
 .vscode/
 .codebuddy/plans/
+.claude/
 *.swp
 *.swo
 *~

@@ -1,12 +1,15 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { askStream } from '@/api/sse';
 import type { AskRequest } from '@/types/ask';
-import type { TimelineNode } from '@/types/sse';
+import type { FinalAnswerEvent, ResearchEvent, TimelineNode } from '@/types/sse';
 
 interface StreamState {
   timeline: TimelineNode[];
   running: boolean;
   error: string | null;
+  finalAnswer: FinalAnswerEvent | null;
+  currentQuestion: string | null;
+  aborted: boolean;
 }
 
 /**
@@ -15,40 +18,65 @@ interface StreamState {
  */
 export function useAskStream() {
   const controllerRef = useRef<AbortController | null>(null);
+  const lastEventIdRef = useRef<number | null>(null);
+  const generationRef = useRef(0);
   const [state, setState] = useState<StreamState>({
     timeline: [],
     running: false,
     error: null,
+    finalAnswer: null,
+    currentQuestion: null,
+    aborted: false,
   });
 
   const stop = useCallback(() => {
+    generationRef.current += 1;
     controllerRef.current?.abort();
     controllerRef.current = null;
-    setState((prev) => ({ ...prev, running: false }));
+    setState((prev) => ({ ...prev, running: false, aborted: true }));
   }, []);
 
-  const start = useCallback((payload: AskRequest, onFinal: () => void) => {
+  const start = useCallback((payload: AskRequest, onFinal?: (event: FinalAnswerEvent) => void) => {
+    generationRef.current += 1;
+    const generation = generationRef.current;
     controllerRef.current?.abort();
-    setState({ timeline: [], running: true, error: null });
+    lastEventIdRef.current = null;
+    setState({
+      timeline: [],
+      running: true,
+      error: null,
+      finalAnswer: null,
+      currentQuestion: payload.question,
+      aborted: false,
+    });
 
     controllerRef.current = askStream(payload, {
-      onEvent: (event) => {
-        setState((prev) => {
-          if (event.type === 'iteration') {
-            return {
-              ...prev,
-              timeline: [
-                ...prev.timeline,
-                {
-                  iteration: event.iteration,
-                  queries: event.queries,
-                  loading: true,
-                },
-              ],
-            };
-          }
+      onEvent: (event: ResearchEvent, eventId?: number) => {
+        if (generation !== generationRef.current) return;
+        if (eventId) lastEventIdRef.current = eventId;
 
-          if (event.type === 'retrieved' || event.type === 'reasoning') {
+        if (event.type === 'error') {
+          setState((prev) => ({ ...prev, running: false, error: event.message }));
+          return;
+        }
+
+        if (event.type === 'iteration') {
+          setState((prev) => ({
+            ...prev,
+            timeline: [
+              ...prev.timeline,
+              {
+                iteration: event.iteration,
+                queries: event.queries,
+                loading: true,
+              },
+            ],
+          }));
+          return;
+        }
+
+        if (event.type === 'retrieved' || event.type === 'reasoning') {
+          setState((prev) => {
             const last = prev.timeline[prev.timeline.length - 1];
             if (!last) return prev;
             const merged: TimelineNode =
@@ -64,34 +92,65 @@ export function useAskStream() {
                     decision: event.decision,
                     reason: event.reason,
                     missing_information: event.missing_information,
+                    findings_count: event.findings_count,
+                    conflicts_count: event.conflicts_count,
                     loading: false,
                   };
             return { ...prev, timeline: [...prev.timeline.slice(0, -1), merged] };
-          }
-
-          if (event.type === 'final_answer') {
-            return {
-              ...prev,
-              running: false,
-              timeline: prev.timeline.map((n) => ({ ...n, loading: false })),
-            };
-          }
-
-          return prev;
-        });
+          });
+          return;
+        }
 
         if (event.type === 'final_answer') {
-          onFinal();
+          setState((prev) => ({
+            ...prev,
+            running: false,
+            finalAnswer: event,
+            timeline: prev.timeline.map((node) => ({ ...node, loading: false })),
+          }));
+          onFinal?.(event);
         }
       },
       onError: (message) => {
+        if (generation !== generationRef.current) return;
         setState((prev) => ({ ...prev, running: false, error: message }));
       },
       onClose: () => {
-        setState((prev) => ({ ...prev, running: false }));
+        if (generation !== generationRef.current) return;
+        setState((prev) => ({
+          ...prev,
+          running: false,
+          aborted: prev.running && !prev.finalAnswer && !prev.error,
+        }));
       },
     });
   }, []);
 
-  return { ...state, start, stop };
+  const reset = useCallback(() => {
+    generationRef.current += 1;
+    controllerRef.current?.abort();
+    controllerRef.current = null;
+    lastEventIdRef.current = null;
+    setState({
+      timeline: [],
+      running: false,
+      error: null,
+      finalAnswer: null,
+      currentQuestion: null,
+      aborted: false,
+    });
+  }, []);
+
+  const settle = useCallback(() => {
+    setState((prev) => ({
+      ...prev,
+      running: false,
+      finalAnswer: null,
+      currentQuestion: null,
+    }));
+  }, []);
+
+  useEffect(() => () => controllerRef.current?.abort(), []);
+
+  return { ...state, start, stop, reset, settle };
 }

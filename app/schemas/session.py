@@ -9,6 +9,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
+from app.schemas.document import Citation
+
 
 class SessionCreateRequest(BaseModel):
     """API-1 请求体。"""
@@ -25,3 +27,15 @@ class SessionResponse(BaseModel):
     default_document_ids: list[str] = Field(default_factory=list)
     message_count: int = 0
     created_at: datetime | None = None
+
+
+class MessageItem(BaseModel):
+    """API-8 单条消息，assistant 消息携带置信度与引用。"""
+
+    message_id: str
+    role: str
+    content: str
+    created_at: datetime
+    agent_run_id: str | None = None
+    confidence: str | None = None
+    citations: list[Citation] = Field(default_factory=list)

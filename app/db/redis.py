@@ -94,6 +94,14 @@ def key_sse_events(agent_run_id: str) -> str:
     return f"ask:events:{agent_run_id}"
 
 
+def key_sse_events_seq(agent_run_id: str) -> str:
+    return f"ask:events:{agent_run_id}:seq"
+
+
+def key_sse_terminal(agent_run_id: str) -> str:
+    return f"ask:events:{agent_run_id}:terminal"
+
+
 # ---------------- 任务队列（M1 文档入库） ----------------
 def key_ingest_queue() -> str:
     return "queue:ingest"

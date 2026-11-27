@@ -156,6 +156,7 @@ services:
   #      2. EMBEDDING_MODEL=BAAI/bge-m3
   #      3. EMBEDDING_DIM=1024
   #      4. QDRANT_COLLECTION 换成另一个名字，例如 document_chunks_bgem3
+  #      5. TEI_SERVED_MODEL_NAME 与 EMBEDDING_MODEL 完全一致，避免 TEI 告警
   #    维度变更的迁移流程见 prd/04-data-model.md §6.3。
   #
   # ⚠️ TEI 只提供 /v1/embeddings，没有 /v1/chat/completions。
@@ -184,8 +185,8 @@ services:
 
     environment:
       MODEL_ID: ${TEI_MODEL_ID:-BAAI/bge-m3}
-      # 仅影响 OpenAI 兼容端点中返回的模型名；留空时等于 MODEL_ID
-      SERVED_MODEL_NAME: ${TEI_SERVED_MODEL_NAME:-}
+      # OpenAI 兼容端点校验请求中的 model 字段；必须与 EMBEDDING_MODEL 一致
+      SERVED_MODEL_NAME: ${TEI_SERVED_MODEL_NAME:-BAAI/bge-m3}
       # 单批最大 token 数，内存不足时可下调
       MAX_BATCH_TOKENS: ${TEI_MAX_BATCH_TOKENS:-16384}
 

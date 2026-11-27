@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -12,7 +14,8 @@ from app.api import sessions as sessions_api  # noqa: F401  # 确保路由模块
 from app.core.errors import ERR_SESSION_PARAM, ApiError
 from app.db.postgres import get_session
 from app.main import app
-from app.schemas.session import SessionResponse
+from app.schemas.common import Page
+from app.schemas.session import MessageItem, SessionResponse
 from app.services import session_service
 
 USER_ID = "9f2c1a8e-3b4d-4f6a-8c21-0e5d7a9b1c34"
@@ -98,3 +101,48 @@ def test_create_session_invalid_body_uses_session_error_code(client):
     )
     assert response.status_code == 400
     assert response.json()["error"]["code"] == ERR_SESSION_PARAM
+
+
+def test_list_messages_returns_paginated_history(client, monkeypatch):
+    http, _ = client
+    calls: dict = {}
+
+    async def _list(*, session_id, user_id, db, page, page_size):
+        calls.update(session_id=session_id, user_id=user_id, page=page, page_size=page_size)
+        return Page[MessageItem](
+            items=[
+                MessageItem(
+                    message_id="1024",
+                    role="user",
+                    content="主要风险有哪些？",
+                    created_at=datetime(2026, 9, 4, 10, 5, tzinfo=UTC),
+                    agent_run_id=None,
+                )
+            ],
+            total=1,
+            page=page,
+            page_size=page_size,
+        )
+
+    monkeypatch.setattr(session_service, "list_messages", _list)
+    session_id = "7d4e5f60-8a9b-4c1d-2e3f-4a5b6c7d8e9f"
+    response = http.get(
+        f"/api/v1/sessions/{session_id}/messages?page=1&page_size=5", headers=HEADERS
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 1
+    assert body["items"][0]["message_id"] == "1024"
+    assert calls == {
+        "session_id": session_id,
+        "user_id": USER_ID,
+        "page": 1,
+        "page_size": 5,
+    }
+
+
+def test_list_messages_requires_user_header(client):
+    http, _ = client
+    session_id = "7d4e5f60-8a9b-4c1d-2e3f-4a5b6c7d8e9f"
+    response = http.get(f"/api/v1/sessions/{session_id}/messages")
+    assert response.status_code == 401

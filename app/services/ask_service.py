@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import time
 import uuid
+from dataclasses import dataclass
 from types import SimpleNamespace
 
 from sqlalchemy import select
@@ -35,11 +36,37 @@ from app.models.agent import Citation as CitationORM
 from app.models.document import Document
 from app.models.session import Message, Session
 from app.schemas.ask import AskRequest, AskResponse, IterationRecord
-from app.services import agent_service, answer_service, citation_service, retrieval_service
+from app.services import (
+    agent_service,
+    answer_service,
+    citation_service,
+    followup_service,
+    retrieval_service,
+)
 
 logger = get_logger(__name__)
 
 _SESSION_LOCK_PERSISTENCE_BUFFER_SECONDS = 30
+
+
+@dataclass(frozen=True)
+class AskPrepared:
+    """API-6 / API-7 共用的已校验问答上下文。"""
+
+    payload: AskRequest
+    chat_session: Session
+    scope_ids: list[str]
+    filename_map: dict[str, str]
+    question: str
+    history_findings: list[str]
+
+
+@dataclass(frozen=True)
+class AskLock:
+    """会话锁状态：Redis 不可用时降级为 PostgreSQL 行锁。"""
+
+    token: str | None
+    degraded: bool
 
 
 def _validate_payload(payload: AskRequest) -> None:
@@ -122,6 +149,82 @@ async def _resolve_scope(
     return chat_session, scope_ids, filename_map
 
 
+async def prepare_ask(
+    *,
+    payload: AskRequest,
+    user_id: str,
+    db: AsyncSession,
+    settings: Settings | None = None,
+    followup: bool = True,
+) -> AskPrepared:
+    """同步与流式问答共用的入流前校验、范围解析与追问上下文准备。"""
+    s = settings or get_settings()
+    _validate_payload(payload)
+    try:
+        chat_session, scope_ids, filename_map = await _resolve_scope(
+            payload=payload, user_id=user_id, db=db
+        )
+    except ApiError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("问答范围校验失败", extra=safe_extra(reason=type(exc).__name__))
+        raise ApiError(ERR_INTERNAL, "问答范围校验失败", status=500) from exc
+
+    question = payload.question.strip()
+    history_findings: list[str] = []
+    if followup:
+        question, history_findings = await followup_service.build_followup_context(
+            session_id=str(chat_session.id),
+            question=question,
+            user_id=user_id,
+            db=db,
+            settings=s,
+        )
+    return AskPrepared(
+        payload=payload,
+        chat_session=chat_session,
+        scope_ids=scope_ids,
+        filename_map=filename_map,
+        question=question,
+        history_findings=list(history_findings),
+    )
+
+
+def ask_lock_ttl(settings: Settings) -> int:
+    """会话锁 TTL 必须覆盖完整调研，避免长任务期间锁提前过期。"""
+    ttl = max(
+        settings.agent_session_lock_ttl_seconds,
+        settings.agent_timeout_seconds + _SESSION_LOCK_PERSISTENCE_BUFFER_SECONDS,
+    )
+    if ttl > settings.agent_session_lock_ttl_seconds:
+        logger.warning(
+            "会话锁 TTL 已上调以覆盖完整调研",
+            extra=safe_extra(configured=settings.agent_session_lock_ttl_seconds, effective=ttl),
+        )
+    return ttl
+
+
+async def acquire_ask_lock(*, session_id: str, settings: Settings) -> AskLock:
+    """获取会话锁；Redis 异常时降级为持久化阶段的行锁。"""
+    try:
+        token = await redis_db.acquire_session_lock(session_id, ask_lock_ttl(settings))
+    except Exception:  # noqa: BLE001
+        return AskLock(token=None, degraded=True)
+    if token is None:
+        raise ApiError(ERR_SESSION_BUSY, "该会话正在处理上一个问题", status=409)
+    return AskLock(token=token, degraded=False)
+
+
+async def release_ask_lock(*, session_id: str, lock: AskLock) -> None:
+    """释放本请求持有的会话锁，忽略释放阶段的异常。"""
+    if lock.token is None:
+        return
+    try:
+        await redis_db.release_session_lock(session_id, lock.token)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 async def _persist(
     *,
     db: AsyncSession,
@@ -132,6 +235,7 @@ async def _persist(
     answer_text: str,
     confidence: str,
     stop_reason: str,
+    agent_question: str | None = None,
     generated=None,
     hits: list[retrieval_service.RetrievedChunk] | None = None,
     citations: list | None = None,
@@ -192,32 +296,35 @@ async def _persist(
         retrieved_count = (
             sum(int(item.retrieved_chunk_count) for item in iterations) if iterations else len(hits)
         )
-        agent_run = AgentRun(
-            id=run_id,
-            session_id=locked.id,
-            user_id=user_id,
-            question=payload.question,
-            document_ids=list(scope_ids),
-            max_iterations=payload.max_iterations,
-            status="done",
-            stop_reason=stop_reason,
-            iteration_count=iteration_count,
-            retrieved_chunk_count=retrieved_count,
-            citation_count=len(citations),
-            citation_filtered_count=citation_filtered_count,
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            token_used=token_used,
-            llm_call_count=(
-                llm_call_count
-                if llm_call_count is not None
-                else 0
-                if stop_reason == "low_relevance"
-                else 1
-            ),
-            fallback_count=fallback_count,
-            duration_ms=duration_ms,
+        agent_run = await db.get(AgentRun, run_id)
+        if agent_run is None:
+            agent_run = AgentRun(
+                id=run_id,
+                session_id=locked.id,
+                user_id=user_id,
+            )
+            db.add(agent_run)
+        agent_run.question = agent_question or payload.question
+        agent_run.document_ids = list(scope_ids)
+        agent_run.max_iterations = payload.max_iterations
+        agent_run.status = "done"
+        agent_run.stop_reason = stop_reason
+        agent_run.iteration_count = iteration_count
+        agent_run.retrieved_chunk_count = retrieved_count
+        agent_run.citation_count = len(citations)
+        agent_run.citation_filtered_count = citation_filtered_count
+        agent_run.prompt_tokens = prompt_tokens
+        agent_run.completion_tokens = completion_tokens
+        agent_run.token_used = token_used
+        agent_run.llm_call_count = (
+            llm_call_count
+            if llm_call_count is not None
+            else 0
+            if stop_reason == "low_relevance"
+            else 1
         )
+        agent_run.fallback_count = fallback_count
+        agent_run.duration_ms = duration_ms
         if iterations:
             iteration_rows = [
                 Iteration(
@@ -240,7 +347,7 @@ async def _persist(
                 Iteration(
                     agent_run_id=run_id,
                     iteration=1,
-                    queries=[payload.question],
+                    queries=[agent_question or payload.question],
                     retrieved_chunk_count=len(hits),
                     new_chunk_count=len(hits),
                     max_score=max_score,
@@ -288,6 +395,97 @@ async def _persist(
     return run_id
 
 
+async def register_stream_run(
+    *,
+    prepared: AskPrepared,
+    agent_run_id: str,
+    user_id: str,
+    db: AsyncSession,
+) -> None:
+    """在 started 事件前登记运行归属，使 pending 运行也可被重连恢复。"""
+    try:
+        existing = await db.get(AgentRun, agent_run_id)
+        if existing is None:
+            db.add(
+                AgentRun(
+                    id=agent_run_id,
+                    session_id=prepared.chat_session.id,
+                    user_id=user_id,
+                    question=prepared.question,
+                    document_ids=list(prepared.scope_ids),
+                    max_iterations=prepared.payload.max_iterations,
+                    status="running",
+                )
+            )
+        await db.commit()
+        logger.info(
+            "流式调研运行已登记",
+            extra=safe_extra(agent_run_id=agent_run_id, session_id=str(prepared.chat_session.id)),
+        )
+    except Exception as exc:  # noqa: BLE001
+        await db.rollback()
+        logger.warning(
+            "流式调研运行登记失败",
+            extra=safe_extra(agent_run_id=agent_run_id, reason=type(exc).__name__),
+        )
+        raise ApiError(ERR_AGENT_FAILED, "调研运行登记失败", status=500) from exc
+
+
+async def mark_run_failed(
+    *,
+    agent_run_id: str,
+    user_id: str,
+    db: AsyncSession,
+) -> None:
+    """把预登记运行标记为失败；失败本身不阻断错误事件推送。"""
+    try:
+        run = await db.get(AgentRun, agent_run_id)
+        if run is not None and run.user_id == user_id and run.status == "running":
+            run.status = "failed"
+            run.stop_reason = "internal_error"
+            await db.commit()
+    except Exception as exc:  # noqa: BLE001
+        await db.rollback()
+        logger.warning(
+            "流式调研运行失败状态更新失败",
+            extra=safe_extra(agent_run_id=agent_run_id, reason=type(exc).__name__),
+        )
+
+
+async def persist_research(
+    *,
+    research: agent_service.ResearchResult,
+    prepared: AskPrepared,
+    user_id: str,
+    db: AsyncSession,
+) -> str:
+    """把调研结果在一个事务中落库；同步与流式问答共用。"""
+    return await _persist(
+        db=db,
+        chat_session=prepared.chat_session,
+        user_id=user_id,
+        payload=prepared.payload,
+        scope_ids=prepared.scope_ids,
+        answer_text=research.answer,
+        confidence=research.confidence,
+        stop_reason=research.stop_reason or "sufficient",
+        agent_question=prepared.question,
+        generated=None,
+        hits=[],
+        citations=research.citations,
+        citation_filtered_count=research.citation_filtered_count,
+        duration_ms=research.duration_ms,
+        iterations=research.iterations,
+        agent_run_id=research.agent_run_id,
+        token_used=research.token_used,
+        prompt_tokens=research.prompt_tokens,
+        completion_tokens=research.completion_tokens,
+        llm_call_count=research.llm_call_count,
+        fallback_count=research.fallback_count,
+        max_score=research.state.get("max_score"),
+    )
+
+
 async def run_single_ask(
     *,
     payload: AskRequest,
@@ -298,48 +496,23 @@ async def run_single_ask(
     """执行同步问答并返回契约响应；内部委托多轮调研状态机。"""
     start = time.perf_counter()
     s = settings or get_settings()
-    _validate_payload(payload)
+    prepared = await prepare_ask(payload=payload, user_id=user_id, db=db, settings=s)
+    chat_session = prepared.chat_session
+    session_id = str(chat_session.id)
+
+    lock = await acquire_ask_lock(session_id=session_id, settings=s)
 
     try:
-        chat_session, scope_ids, filename_map = await _resolve_scope(
-            payload=payload, user_id=user_id, db=db
-        )
-    except ApiError:
-        raise
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("问答范围校验失败", extra=safe_extra(reason=type(exc).__name__))
-        raise ApiError(ERR_INTERNAL, "问答范围校验失败", status=500) from exc
-
-    lock_ttl = max(
-        s.agent_session_lock_ttl_seconds,
-        s.agent_timeout_seconds + _SESSION_LOCK_PERSISTENCE_BUFFER_SECONDS,
-    )
-    if lock_ttl > s.agent_session_lock_ttl_seconds:
-        logger.warning(
-            "会话锁 TTL 已上调以覆盖完整调研",
-            extra=safe_extra(configured=s.agent_session_lock_ttl_seconds, effective=lock_ttl),
-        )
-
-    lock_token: str | None = None
-    lock_degraded = False
-    try:
-        lock_token = await redis_db.acquire_session_lock(str(chat_session.id), lock_ttl)
-    except Exception:  # noqa: BLE001
-        # Redis 不可用时降级到 _persist 中的 PostgreSQL 行锁，不阻断问答。
-        lock_degraded = True
-    if not lock_degraded and lock_token is None:
-        raise ApiError(ERR_SESSION_BUSY, "该会话正在处理上一个问题", status=409)
-
-    try:
-        if scope_ids:
+        if prepared.scope_ids:
             research = await agent_service.run_research(
                 agent_run_id=str(uuid.uuid4()),
-                question=payload.question.strip(),
-                session_id=str(chat_session.id),
+                question=prepared.question,
+                session_id=session_id,
                 user_id=user_id,
-                document_ids=scope_ids,
-                filename_map=filename_map,
+                document_ids=prepared.scope_ids,
+                filename_map=prepared.filename_map,
                 max_iterations=payload.max_iterations,
+                history_findings=prepared.history_findings,
                 settings=s,
             )
             agent_run_id = await _persist(
@@ -347,10 +520,11 @@ async def run_single_ask(
                 chat_session=chat_session,
                 user_id=user_id,
                 payload=payload,
-                scope_ids=scope_ids,
+                scope_ids=prepared.scope_ids,
                 answer_text=research.answer,
                 confidence=research.confidence,
                 stop_reason=research.stop_reason or "sufficient",
+                agent_question=prepared.question,
                 generated=None,
                 hits=[],
                 citations=research.citations,
@@ -394,9 +568,9 @@ async def run_single_ask(
 
         # 空范围不能退化为「仅按 user_id 检索」：直接走无证据答案分支。
         hits: list[retrieval_service.RetrievedChunk] = []
-        generated = await answer_service.generate_answer(payload.question.strip(), hits, s)
+        generated = await answer_service.generate_answer(prepared.question, hits, s)
         citations, filtered_count = citation_service.build_citations(
-            hits, filename_map, generated.used_chunk_ids, settings=s
+            hits, prepared.filename_map, generated.used_chunk_ids, settings=s
         )
         duration_ms = int((time.perf_counter() - start) * 1000)
         agent_run_id = await _persist(
@@ -404,10 +578,11 @@ async def run_single_ask(
             chat_session=chat_session,
             user_id=user_id,
             payload=payload,
-            scope_ids=scope_ids,
+            scope_ids=prepared.scope_ids,
             answer_text=generated.answer,
             confidence=generated.confidence,
             stop_reason="low_relevance",
+            agent_question=prepared.question,
             generated=generated,
             hits=hits,
             citations=citations,
@@ -427,7 +602,7 @@ async def run_single_ask(
             iterations=[
                 IterationRecord(
                     iteration=1,
-                    queries=[payload.question],
+                    queries=[prepared.question],
                     retrieved_chunk_count=0,
                     new_chunk_count=0,
                     findings=list(generated.findings),
@@ -440,11 +615,7 @@ async def run_single_ask(
             citations=citations,
         )
     finally:
-        if lock_token:
-            try:
-                await redis_db.release_session_lock(str(chat_session.id), lock_token)
-            except Exception:  # noqa: BLE001
-                pass
+        await release_ask_lock(session_id=session_id, lock=lock)
 
 
-__all__ = ["run_single_ask"]
+__all__ = ["prepare_ask", "run_single_ask"]

@@ -55,6 +55,9 @@ export type ResearchEvent =
       trace_id: string;
     };
 
+export type FinalAnswerEvent = Extract<ResearchEvent, { type: 'final_answer' }>;
+export type ResearchErrorEvent = Extract<ResearchEvent, { type: 'error' }>;
+
 /** 调研过程中的单个时间线节点（由事件聚合而来） */
 export interface TimelineNode {
   iteration: number;
@@ -65,5 +68,7 @@ export interface TimelineNode {
   decision?: 'continue' | 'answer';
   reason?: string;
   missing_information?: string;
+  findings_count?: number;
+  conflicts_count?: number;
   loading: boolean;
 }

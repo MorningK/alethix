@@ -239,7 +239,12 @@ EMBEDDING_BASE_URL=http://localhost:8080/v1   # 只改这个
 EMBEDDING_MODEL=BAAI/bge-m3
 EMBEDDING_DIM=1024                            # bge-m3 是 1024 维，非 1536
 QDRANT_COLLECTION=document_chunks_bgem3       # 必须换一个集合，禁止与 1536 维混用
+TEI_SERVED_MODEL_NAME=BAAI/bge-m3             # 必须与 EMBEDDING_MODEL 一致，否则 TEI 告警
 ```
+
+`TEI_SERVED_MODEL_NAME` 会作为 TEI OpenAI 兼容端点的 `served_model_name`，必须与客户端
+`EMBEDDING_MODEL` 完全一致；若两者不一致，TEI 会对每个 `/v1/embeddings` 请求打印
+`model=... has not been found` 告警（向量结果仍可正常返回）。
 
 本地 TEI 默认**无需鉴权**。`docker-compose.yml` 通过可选的 `tei.env` 文件传 `API_KEY`：文件不存在时
 完全不传，避免空字符串被 TEI 当作“启用鉴权但 key 为空”而导致 `/v1/embeddings` 返回 401。
@@ -261,18 +266,24 @@ Qdrant 存储格式跨版本不保证兼容。`docker-compose.yml` 中固定为 
 
 ### 3. 业务功能进度说明
 
-当前进度：**M0 基础设施、M1 文档入库、M2 单次检索问答、M3 多轮调研已完成**，前端 **F1 脚手架、F2 文档管理已完成**；
-M4–M6 与前端 F3–F5 待实现。
+当前进度：**M0 基础设施、M1 文档入库、M2 单次检索问答、M3 多轮调研、M4 流式与会话已完成**，
+前端 **F1 脚手架、F2 文档管理、F3 问答与调研过程已完成**；M5–M6 与前端 F4–F5 待实现。
 
 M1 已打通「上传 → 解析 → 切片 → 向量化 → 入库」链路（API-2 ~ API-5 + ingest worker）。
 M2 已实现 API-1 创建会话与 API-6 单次问答：单次 embedding + Qdrant 检索 + 带引用答案，
 引用只从命中切片白名单生成。
 M3 已将 API-6 内部编排升级为 LangGraph 五节点状态机：查询规划 → 并发检索 → 证据分析 →
 充分性决策 → 带引用终答；证据不足时自动追查，命中七类终止策略之一即收尾。
-迁移 `0003_langgraph_checkpoints` 由 Alembic 管理 LangGraph checkpointer 表；
-`POST /ask/stream` 仍属于 M4，当前返回 501。
+迁移 `0003_langgraph_checkpoints` 由 Alembic 管理 LangGraph checkpointer 表。
 
-已知偏差：`documents.user_id` 暂无 `users` 外键（DDL 中的 users 表随鉴权里程碑 M6 建立时补齐）。
+M4 已实现 API-7 `POST /ask/stream`（SSE）与 API-8 会话历史：流式按 `started →
+(iteration → retrieved → reasoning)* → final_answer` 推送过程事件，支持 15 秒心跳、
+`Last-Event-ID` 重放（最近 100 条）、客户端断开取消图执行与会话锁释放；追问复用最近 3 轮
+`findings`，进入图前做一次指代消解改写，失败时原样透传。API-6 与 API-7 共用校验、
+范围解析、会话锁与落库逻辑，请求/响应契约保持不变。
+
+已知偏差：`documents.user_id` 暂无 `users` 外键（DDL 中的 users 表随鉴权里程碑 M6 建立时补齐）；
+F4 会话列表/切换/删除尚未实现，问答页暂通过 URL 与当前会话状态承接。
 
 ### 4. M1 手工端到端验证
 
@@ -314,7 +325,7 @@ curl -X POST http://127.0.0.1:8000/api/v1/ask \
 ```
 
 前端在 `/documents` 完成上传、状态追踪、删除与勾选；点击「基于选中文档发起提问」会创建会话并跳转到 `/chat/<session_id>`。
-问答页当前只承接会话与检索范围，调研时间线与答案面板属于 F3。
+问答页已接入流式调研时间线、答案/引用面板与追问输入，检索范围可通过 Tag 临时移除并在本页恢复。
 
 ### 6. M3 多轮调研说明
 
@@ -327,6 +338,28 @@ curl -X POST http://127.0.0.1:8000/api/v1/ask \
 - 同一会话在 Redis 可用时使用互斥锁，冲突返回 `4094001`；Redis 不可用时回落到 PostgreSQL 行锁。
 
 启动或迁移后需执行 `uv run alembic upgrade head` 以创建 LangGraph checkpointer 表。
+
+### 7. M4 流式问答与会话历史验证
+
+```bash
+# SSE 流式问答：逐行观察 started / iteration / retrieved / reasoning / final_answer
+curl -N -X POST http://127.0.0.1:8000/api/v1/ask/stream \
+  -H "X-User-Id: <uuid>" \
+  -H "Content-Type: application/json" \
+  -d '{"session_id":"<session_uuid>","question":"主要风险有哪些？","document_ids":[]}'
+
+# 会话历史：按时间正序，assistant 消息自带 citations
+curl -H "X-User-Id: <uuid>" \
+  "http://127.0.0.1:8000/api/v1/sessions/<session_uuid>/messages?page=1&page_size=20"
+```
+
+断线重连时同时携带 `Last-Event-ID: <上一条事件编号>` 与 `X-Agent-Run-Id: <原 agent_run_id>`，
+服务端校验运行归属后只回放/尾随原运行的事件，不会启动新调研或重复落库；空闲 15 秒会收到
+`: ping` 注释行。若运行已完成/失败且没有可重放事件，服务端会关闭该 SSE 流而不是持续心跳。
+前端在 `/chat/<session_id>` 提供停止按钮，点击或切换会话会 `abort()` 并取消服务端图执行。
+
+SSE 事件优先存于 Redis 以支持多 worker 重放；Redis 故障期间自动回退到进程内存，
+此时 `Last-Event-ID` 重放仅在产生事件的同一进程内有效。
 
 ---
 
@@ -355,11 +388,11 @@ curl -X POST http://127.0.0.1:8000/api/v1/ask \
 | M1   | 文档入库（解析、切片、向量化）             | ✅ 已完成 |
 | M2   | 基础问答（单次检索、带引用答案）           | ✅ 已完成 |
 | M3   | **多轮调研**（LangGraph 五节点、终止策略） | ✅ 已完成 |
-| M4   | 流式与会话（SSE、历史、追问）              | ⬜ 待实现 |
+| M4   | **流式与会话**（SSE、历史、追问）          | ✅ 已完成 |
 | M5   | 质量与观测（评测集、指标、对账）           | ⬜ 待实现 |
 | M6   | 生产就绪（限流、部署、压测）               | ⬜ 待实现 |
 
-前端对应 F1~~F5 里程碑：F1 脚手架与 F2 文档管理已完成，F3~~F5 待实现；
+前端对应 F1~~F5 里程碑：F1 脚手架、F2 文档管理与 F3 问答调研过程已完成，F4~~F5 待实现；
 详见 [prd/07-frontend.md](./prd/07-frontend.md#11-里程碑与工期估算)。
 
 ---
