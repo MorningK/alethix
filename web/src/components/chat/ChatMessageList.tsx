@@ -11,7 +11,7 @@ interface ChatMessageListProps {
 const roles = {
   user: {
     placement: 'end' as const,
-    avatar: <Avatar className="bg-blue-600">你</Avatar>,
+    avatar: <Avatar className="paper-avatar-user">你</Avatar>,
     variant: 'filled' as const,
     contentRender: (content: unknown) => {
       const item = content as ChatBubbleContent;
@@ -20,7 +20,7 @@ const roles = {
   },
   ai: {
     placement: 'start' as const,
-    avatar: <Avatar className="bg-indigo-600">AI</Avatar>,
+    avatar: <Avatar className="paper-avatar-ai">AI</Avatar>,
     variant: 'outlined' as const,
     loadingRender: () => <Typography.Text type="secondary">智能体正在分析证据…</Typography.Text>,
     contentRender: (content: unknown) => {

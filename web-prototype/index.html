@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="blue-gray">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="Alethix 探赜 Web 界面原型：三套视觉方案、文档管理、会话管理与可核验调研问答。"
+    />
+    <title>Alethix · 探赜 | 界面原型</title>
+    <script>
+      (function () {
+        try {
+          var t = localStorage.getItem('alethix.prototype.theme');
+          if (t === 'blue-gray' || t === 'dark-lab' || t === 'paper') {
+            document.documentElement.setAttribute('data-theme', t);
+          }
+        } catch (e) {}
+      })();
+    </script>
+    <link rel="stylesheet" href="assets/css/tokens.css" />
+    <link rel="stylesheet" href="assets/css/base.css" />
+    <link rel="stylesheet" href="assets/css/components.css" />
+  </head>
+  <body>
+    <noscript>
+      <div class="noscript">该原型需要启用 JavaScript 才能演示交互。</div>
+    </noscript>
+
+    <div id="app" aria-live="polite"></div>
+
+    <div id="toast-region" class="toast-region" aria-live="polite" aria-atomic="false"></div>
+
+    <dialog id="confirm-dialog" class="confirm-dialog" aria-labelledby="confirm-title">
+      <div class="confirm-dialog__icon" id="confirm-icon"></div>
+      <h2 id="confirm-title">确认操作</h2>
+      <p id="confirm-message"></p>
+      <div class="confirm-dialog__actions">
+        <button type="button" class="btn btn--ghost" data-confirm-cancel>取消</button>
+        <button type="button" class="btn btn--danger" data-confirm-ok>确认</button>
+      </div>
+    </dialog>
+
+    <script src="assets/js/icons.js"></script>
+    <script src="assets/js/data.js"></script>
+    <script src="assets/js/store.js"></script>
+    <script src="assets/js/stream.js"></script>
+    <script src="assets/js/documents-view.js"></script>
+    <script src="assets/js/chat-view.js"></script>
+    <script src="assets/js/app.js"></script>
+  </body>
+</html>

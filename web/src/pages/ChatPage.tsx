@@ -1,16 +1,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Button, Card, Tag, Typography } from 'antd';
+import { Alert, Button, Card, Drawer, Tag, Typography } from 'antd';
+import { useQuery } from '@tanstack/react-query';
+import { PanelLeft, PanelRight } from 'lucide-react';
 import { useParams } from 'react-router-dom';
+import { listDocuments } from '@/api/documents';
 import { ChatComposer } from '@/components/chat/ChatComposer';
 import { ChatMessageList } from '@/components/chat/ChatMessageList';
 import { ResearchChain } from '@/components/chat/ResearchChain';
+import { SessionRail } from '@/components/session/SessionRail';
 import { useAskStream } from '@/hooks/useAskStream';
 import { useSessionMessages } from '@/hooks/useSession';
 import { useAppStore } from '@/store/useAppStore';
 import type { FinalAnswerEvent } from '@/types/sse';
 import { toBubbleItems, toResearchChainItems } from '@/utils/chatAdapters';
 
-/** Ant Design X 问答调研页：对话气泡 + 调研思维链 + Sender。 */
+/** Ant Design X 问答调研页：会话侧栏 + 对话区 + 可收起的调研过程。 */
 export function ChatPage() {
   const { sessionId } = useParams();
   const currentSessionId = useAppStore((state) => state.currentSessionId);
@@ -25,6 +29,8 @@ export function ChatPage() {
     sessionId: null,
     ids: [],
   });
+  const [researchOpen, setResearchOpen] = useState(false);
+  const [sessionOpen, setSessionOpen] = useState(false);
   const lastSessionRef = useRef<string | null | undefined>(undefined);
   const activeSessionRef = useRef(activeSessionId);
   const turnRef = useRef(0);
@@ -33,6 +39,16 @@ export function ChatPage() {
   const historyRef = useRef(history);
   const timelineState = useAskStream();
   const { start, stop, settle, reset } = timelineState;
+
+  const documentNames = useQuery({
+    queryKey: ['documents', 'scope-names'],
+    queryFn: () => listDocuments({ page: 1, page_size: 100 }),
+    staleTime: 60_000,
+  });
+  const nameById = useMemo(
+    () => new Map(documentNames.data?.items.map((doc) => [doc.document_id, doc.filename]) ?? []),
+    [documentNames.data],
+  );
 
   useEffect(() => {
     historyRef.current = history;
@@ -109,15 +125,49 @@ export function ChatPage() {
     [timelineState.timeline, timelineState.finalAnswer],
   );
 
+  const research = <ResearchChain items={chainItems} />;
+  const scopeTags = scopeIds.length ? (
+    scopeIds.map((id) => (
+      <Tag
+        key={id}
+        closable
+        className="paper-scope-tag"
+        onClose={() => setExcluded({ sessionId: activeSessionId, ids: [...excludedDocIds, id] })}
+      >
+        {nameById.get(id) ?? `${id.slice(0, 8)}…`}
+      </Tag>
+    ))
+  ) : (
+    <Tag className="paper-scope-tag">全部就绪文档</Tag>
+  );
+
   return (
-    <div className="mx-auto flex h-[calc(100vh-104px)] min-h-[620px] w-full max-w-7xl flex-col gap-4">
-      <div className="shrink-0 rounded-xl bg-gradient-to-r from-[#1D4ED8] to-[#3B82F6] px-6 py-4 text-white shadow-sm">
-        <Typography.Title level={4} className="mb-1 text-white">
-          智能问答 · 调研工作台
-        </Typography.Title>
-        <Typography.Text className="text-white/80">
-          每一轮检索、证据判断与引用均可逐步核对，答案不会脱离原文依据
-        </Typography.Text>
+    <div className="mx-auto flex h-[calc(100vh-104px)] min-h-[620px] w-full max-w-[1440px] flex-col gap-4">
+      <div className="paper-hero flex shrink-0 items-start justify-between gap-4 px-6 py-4">
+        <div>
+          <Typography.Title level={4} className="paper-title mb-1">
+            智能问答 · 调研工作台
+          </Typography.Title>
+          <Typography.Text className="paper-hero-subtitle text-sm">
+            每一轮检索、证据判断与引用均可逐步核对，答案不会脱离原文依据
+          </Typography.Text>
+        </div>
+        <div className="flex shrink-0 gap-2">
+          <Button
+            icon={<PanelLeft size={16} />}
+            className="paper-research-toggle xl:hidden"
+            onClick={() => setSessionOpen(true)}
+          >
+            会话
+          </Button>
+          <Button
+            icon={<PanelRight size={16} />}
+            className="paper-research-toggle xl:hidden"
+            onClick={() => setResearchOpen(true)}
+          >
+            调研过程
+          </Button>
+        </div>
       </div>
 
       {!activeSessionId && (
@@ -129,103 +179,115 @@ export function ChatPage() {
         />
       )}
 
-      <Card
-        title="检索范围"
-        className="shrink-0 border-slate-100 shadow-sm"
-        styles={{ body: { padding: 12 } }}
-      >
-        <div className="flex flex-wrap items-center gap-2">
-          {scopeIds.length > 0 ? (
-            scopeIds.map((id) => (
-              <Tag
-                key={id}
-                closable
-                color="blue"
-                onClose={() =>
-                  setExcluded({ sessionId: activeSessionId, ids: [...excludedDocIds, id] })
-                }
-              >
-                {id.slice(0, 8)}…
-              </Tag>
-            ))
-          ) : (
-            <Tag color="blue">全部就绪文档</Tag>
-          )}
-          {excludedDocIds.length > 0 && (
-            <Button
-              type="link"
-              size="small"
-              onClick={() => setExcluded({ sessionId: activeSessionId, ids: [] })}
-            >
-              恢复全部范围
-            </Button>
-          )}
-          {!session && activeSessionId && (
-            <Typography.Text type="secondary" className="text-xs">
-              当前浏览器未保存该会话的范围，默认检索全部就绪文档
-            </Typography.Text>
-          )}
-        </div>
-      </Card>
-
-      {timelineState.error && (
-        <Alert type="error" showIcon title="调研未能完成" description={timelineState.error} />
-      )}
-      {timelineState.aborted && !timelineState.error && (
-        <Alert
-          type="warning"
-          showIcon
-          title="调研已停止"
-          description="本次未生成完整答案，可重新提问继续调研。"
-        />
-      )}
-
       <div className="flex min-h-0 flex-1 gap-4">
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-slate-100 bg-white shadow-sm">
-          {history.isError && (
+        <SessionRail session={session} className="hidden xl:flex" />
+
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-4">
+          <Card
+            title="检索范围"
+            className="paper-scope-card border-paper-line shrink-0 shadow-sm"
+            styles={{ body: { padding: 12 } }}
+          >
+            <div className="flex flex-wrap items-center gap-2">
+              {scopeTags}
+              {excludedDocIds.length > 0 && (
+                <Button
+                  type="link"
+                  size="small"
+                  onClick={() => setExcluded({ sessionId: activeSessionId, ids: [] })}
+                >
+                  恢复全部范围
+                </Button>
+              )}
+              {!session && activeSessionId && (
+                <Typography.Text type="secondary" className="text-xs">
+                  当前浏览器未保存该会话的范围，默认检索全部就绪文档
+                </Typography.Text>
+              )}
+            </div>
+          </Card>
+
+          {timelineState.error && (
+            <Alert type="error" showIcon title="调研未能完成" description={timelineState.error} />
+          )}
+          {timelineState.aborted && !timelineState.error && (
             <Alert
               type="warning"
               showIcon
-              title="会话历史加载失败"
-              description={history.olderError ?? '当前答案与调研过程仍可查看，稍后可刷新页面重试。'}
+              title="调研已停止"
+              description="本次未生成完整答案，可重新提问继续调研。"
             />
           )}
-          {history.hasOlder && (
-            <div className="shrink-0 border-b border-slate-100 px-4 py-2">
-              <Button
-                type="link"
-                size="small"
-                loading={history.loadingOlder}
-                onClick={history.loadOlder}
-              >
-                加载更早消息
-              </Button>
+
+          <div className="paper-chat-panel flex min-h-0 flex-1 flex-col overflow-hidden border">
+            {history.isError && (
+              <Alert
+                type="warning"
+                showIcon
+                title="会话历史加载失败"
+                description={
+                  history.olderError ?? '当前答案与调研过程仍可查看，稍后可刷新页面重试。'
+                }
+              />
+            )}
+            {history.hasOlder && (
+              <div className="border-paper-line shrink-0 border-b px-4 py-2">
+                <Button
+                  type="link"
+                  size="small"
+                  loading={history.loadingOlder}
+                  onClick={history.loadOlder}
+                >
+                  加载更早消息
+                </Button>
+              </div>
+            )}
+            <div className="min-h-0 flex-1">
+              <ChatMessageList items={bubbleItems} />
             </div>
-          )}
-          <div className="min-h-0 flex-1">
-            <ChatMessageList items={bubbleItems} />
-          </div>
-          <div className="shrink-0 border-t border-slate-100 p-4">
-            <ChatComposer
-              value={value}
-              running={timelineState.running}
-              disabled={!activeSessionId}
-              showPrompts={bubbleItems.length === 0 && !timelineState.running}
-              onChange={setValue}
-              onSubmit={handleSubmit}
-              onCancel={stop}
-            />
+            <div className="border-paper-line shrink-0 border-t p-4">
+              <ChatComposer
+                value={value}
+                running={timelineState.running}
+                disabled={!activeSessionId}
+                showPrompts={bubbleItems.length === 0 && !timelineState.running}
+                onChange={setValue}
+                onSubmit={handleSubmit}
+                onCancel={stop}
+              />
+            </div>
           </div>
         </div>
 
         <Card
           title="调研过程"
-          className="hidden w-[340px] shrink-0 overflow-auto border-slate-100 shadow-sm xl:block"
+          className="paper-research-card hidden shrink-0 overflow-auto xl:block"
           styles={{ body: { padding: 16 } }}
         >
-          <ResearchChain items={chainItems} />
+          {research}
         </Card>
       </div>
+
+      <Drawer
+        title="调研过程"
+        placement="right"
+        width={400}
+        open={researchOpen}
+        onClose={() => setResearchOpen(false)}
+        className="paper-drawer"
+      >
+        {research}
+      </Drawer>
+      <Drawer
+        title="会话信息"
+        placement="left"
+        width={320}
+        open={sessionOpen}
+        onClose={() => setSessionOpen(false)}
+        className="paper-drawer"
+      >
+        <SessionRail session={session} className="border-0 bg-transparent shadow-none" />
+      </Drawer>
     </div>
   );
 }

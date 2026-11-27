@@ -136,7 +136,7 @@ export function DocumentTable({
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between gap-4">
-        <Typography.Text strong className="text-ink text-base">
+        <Typography.Text strong className="paper-title text-ink text-base">
           文档列表
         </Typography.Text>
         <Select
@@ -148,6 +148,7 @@ export function DocumentTable({
         />
       </div>
       <Table<DocumentBrief>
+        className="paper-table"
         rowKey="document_id"
         columns={columns}
         dataSource={documents}

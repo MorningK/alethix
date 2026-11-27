@@ -47,6 +47,7 @@ export function ChatComposer({
       )}
 
       <Sender
+        className="paper-composer"
         value={value}
         onChange={onChange}
         loading={running}

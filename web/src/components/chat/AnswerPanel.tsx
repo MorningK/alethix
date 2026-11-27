@@ -13,9 +13,9 @@ export function AnswerPanel({ answer }: AnswerPanelProps) {
   const seconds = Math.max(1, Math.round(answer.duration_ms / 1000));
 
   return (
-    <div className="flex flex-col gap-3">
+    <div className="paper-answer flex flex-col gap-3">
       <div className="flex flex-wrap items-center gap-2">
-        <Tag color={CONFIDENCE_COLOR[answer.confidence]}>
+        <Tag color={CONFIDENCE_COLOR[answer.confidence]} className="paper-confidence">
           置信度：{CONFIDENCE_LABEL[answer.confidence]}
         </Tag>
         <Tag>{meta.label}</Tag>
@@ -25,7 +25,13 @@ export function AnswerPanel({ answer }: AnswerPanelProps) {
         </Typography.Text>
       </div>
 
-      <Alert type={meta.tone} showIcon title={meta.label} description={meta.description} />
+      <Alert
+        type={meta.tone}
+        showIcon
+        title={meta.label}
+        description={meta.description}
+        className="paper-stop-alert"
+      />
 
       <XMarkdown
         content={answer.answer}

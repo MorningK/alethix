@@ -1,0 +1,335 @@
+/* =========================================================
+   Primitive tokens — 原始色值、字号、间距、圆角
+   组件中禁止直接写十六进制色值，一律引用语义 token。
+   ========================================================= */
+:root {
+  --blue-50: #eff6ff;
+  --blue-100: #dbeafe;
+  --blue-200: #bfdbfe;
+  --blue-500: #3b82f6;
+  --blue-600: #2563eb;
+  --blue-700: #1d4ed8;
+
+  --navy-950: #070c16;
+  --navy-900: #0b1220;
+  --navy-800: #111c2e;
+  --navy-750: #152239;
+  --navy-700: #1b2b45;
+  --navy-600: #2b3f5d;
+
+  --sky-300: #7dd3fc;
+  --sky-400: #38bdf8;
+  --sky-500: #0ea5e9;
+
+  --amber-50: #fffbeb;
+  --amber-100: #fef3c7;
+  --amber-600: #d97706;
+  --amber-700: #b45309;
+
+  --stone-50: #fffdf7;
+  --stone-100: #f8f2e4;
+  --stone-200: #efe5d0;
+  --stone-400: #a79880;
+  --stone-600: #6b5b4b;
+  --stone-800: #3b2f2f;
+
+  --green-400: #34d399;
+  --green-500: #00b42a;
+  --green-600: #059669;
+
+  --red-400: #fb7185;
+  --red-500: #f53f3f;
+  --red-600: #dc2626;
+
+  --orange-400: #fbbf24;
+  --orange-500: #ff7d00;
+
+  --gray-50: #f7f8fa;
+  --gray-100: #f1f3f7;
+  --gray-200: #e5e9f0;
+  --gray-300: #d0d7e3;
+  --gray-400: #a6afbd;
+  --gray-500: #8a94a6;
+  --gray-600: #646a73;
+  --gray-700: #3f4650;
+  --gray-800: #1f2329;
+
+  --white: #ffffff;
+  --transparent: transparent;
+
+  --font-sans: "PingFang SC", "Microsoft YaHei", "Noto Sans SC", -apple-system,
+    BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-serif: "Cormorant Garamond", "Noto Serif SC", "Songti SC", Georgia, serif;
+  --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+
+  --text-2xs: 11px;
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-md: 14px;
+  --text-lg: 16px;
+  --text-xl: 20px;
+  --text-2xl: 24px;
+  --text-3xl: 32px;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 20px;
+  --radius-pill: 999px;
+
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.06);
+  --shadow-md: 0 8px 24px rgba(15, 23, 42, 0.08);
+  --shadow-lg: 0 20px 60px rgba(15, 23, 42, 0.16);
+  --shadow-dark: 0 18px 50px rgba(0, 0, 0, 0.42);
+
+  --dur-fast: 140ms;
+  --dur-base: 220ms;
+  --dur-slow: 380ms;
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* =========================================================
+   Semantic tokens — 方案 A：升级蓝灰（默认）
+   ========================================================= */
+[data-theme="blue-gray"] {
+  --canvas: var(--gray-50);
+  --canvas-accent: var(--blue-50);
+  --surface: var(--white);
+  --surface-2: var(--gray-100);
+  --surface-3: var(--blue-50);
+  --surface-raised: var(--white);
+  --surface-inverse: var(--navy-800);
+
+  --text: var(--gray-800);
+  --text-secondary: var(--gray-600);
+  --text-subtle: var(--gray-500);
+  --text-on-primary: var(--white);
+  --text-on-inverse: var(--gray-100);
+
+  --border: var(--gray-200);
+  --border-strong: var(--gray-300);
+  --divider: var(--gray-100);
+
+  --primary: var(--blue-600);
+  --primary-hover: var(--blue-700);
+  --primary-soft: var(--blue-50);
+  --primary-soft-strong: var(--blue-100);
+  --accent: var(--blue-500);
+  --ring: var(--blue-200);
+
+  --success: var(--green-500);
+  --success-soft: #e8f9ee;
+  --warning: var(--orange-500);
+  --warning-soft: #fff3e6;
+  --danger: var(--red-500);
+  --danger-soft: #ffeded;
+  --info: var(--blue-600);
+  --info-soft: var(--blue-50);
+
+  --hero-gradient: linear-gradient(120deg, var(--blue-50) 0%, var(--white) 52%, #eef2ff 100%);
+  --brand-gradient: linear-gradient(135deg, var(--blue-600), var(--blue-500));
+  --focus-shadow: 0 0 0 3px var(--blue-100);
+  --elev-1: var(--shadow-sm);
+  --elev-2: var(--shadow-md);
+  --elev-3: var(--shadow-lg);
+
+  --nav-bg: rgba(255, 255, 255, 0.88);
+  --nav-border: var(--gray-200);
+  --card-bg: var(--white);
+  --card-border: var(--gray-200);
+  --upload-bg: linear-gradient(180deg, var(--white), var(--blue-50));
+  --upload-border: var(--blue-200);
+  --upload-border-hover: var(--blue-500);
+  --tag-bg: var(--gray-100);
+  --tag-fg: var(--gray-700);
+  --bubble-user: var(--blue-600);
+  --bubble-user-text: var(--white);
+  --bubble-assistant: var(--white);
+  --timeline-line: var(--blue-100);
+  --timeline-dot: var(--blue-600);
+  --timeline-dot-done: var(--green-500);
+  --evidence-bg: var(--blue-50);
+  --evidence-border: var(--blue-100);
+}
+
+/* =========================================================
+   Semantic tokens — 方案 B：深色研究台
+   ========================================================= */
+[data-theme="dark-lab"] {
+  --canvas: var(--navy-950);
+  --canvas-accent: var(--navy-900);
+  --surface: var(--navy-800);
+  --surface-2: var(--navy-750);
+  --surface-3: var(--navy-700);
+  --surface-raised: var(--navy-750);
+  --surface-inverse: var(--gray-100);
+
+  --text: var(--gray-100);
+  --text-secondary: #93a4bc;
+  --text-subtle: #7387a3;
+  --text-on-primary: var(--navy-950);
+  --text-on-inverse: var(--gray-800);
+
+  --border: var(--navy-600);
+  --border-strong: #3b5070;
+  --divider: var(--navy-700);
+
+  --primary: var(--sky-400);
+  --primary-hover: var(--sky-300);
+  --primary-soft: rgba(56, 189, 248, 0.12);
+  --primary-soft-strong: rgba(56, 189, 248, 0.24);
+  --accent: var(--sky-300);
+  --ring: rgba(56, 189, 248, 0.45);
+
+  --success: var(--green-400);
+  --success-soft: rgba(52, 211, 153, 0.14);
+  --warning: var(--orange-400);
+  --warning-soft: rgba(251, 191, 36, 0.14);
+  --danger: var(--red-400);
+  --danger-soft: rgba(251, 113, 133, 0.14);
+  --info: var(--sky-400);
+  --info-soft: rgba(56, 189, 248, 0.12);
+
+  --hero-gradient: linear-gradient(120deg, var(--navy-900) 0%, var(--navy-950) 55%, #0d1b31 100%);
+  --brand-gradient: linear-gradient(135deg, var(--sky-400), #818cf8);
+  --focus-shadow: 0 0 0 3px rgba(56, 189, 248, 0.32);
+  --elev-1: 0 1px 2px rgba(0, 0, 0, 0.5);
+  --elev-2: var(--shadow-dark);
+  --elev-3: 0 28px 80px rgba(0, 0, 0, 0.6);
+
+  --nav-bg: rgba(11, 18, 32, 0.9);
+  --nav-border: var(--navy-600);
+  --card-bg: var(--navy-800);
+  --card-border: var(--navy-600);
+  --upload-bg: linear-gradient(180deg, var(--navy-800), var(--navy-900));
+  --upload-border: var(--navy-600);
+  --upload-border-hover: var(--sky-400);
+  --tag-bg: var(--navy-700);
+  --tag-fg: var(--gray-100);
+  --bubble-user: var(--sky-500);
+  --bubble-user-text: var(--navy-950);
+  --bubble-assistant: var(--navy-750);
+  --timeline-line: var(--navy-600);
+  --timeline-dot: var(--sky-400);
+  --timeline-dot-done: var(--green-400);
+  --evidence-bg: rgba(56, 189, 248, 0.1);
+  --evidence-border: rgba(56, 189, 248, 0.25);
+}
+
+/* =========================================================
+   Semantic tokens — 方案 C：纸感阅读
+   ========================================================= */
+[data-theme="paper"] {
+  --canvas: var(--stone-50);
+  --canvas-accent: var(--stone-100);
+  --surface: var(--white);
+  --surface-2: var(--stone-100);
+  --surface-3: var(--amber-50);
+  --surface-raised: var(--white);
+  --surface-inverse: var(--stone-800);
+
+  --text: var(--stone-800);
+  --text-secondary: var(--stone-600);
+  --text-subtle: var(--stone-400);
+  --text-on-primary: var(--white);
+  --text-on-inverse: var(--stone-50);
+
+  --border: var(--stone-200);
+  --border-strong: var(--stone-400);
+  --divider: var(--stone-100);
+
+  --primary: var(--amber-700);
+  --primary-hover: #92400e;
+  --primary-soft: var(--amber-50);
+  --primary-soft-strong: var(--amber-100);
+  --accent: var(--amber-600);
+  --ring: var(--amber-100);
+
+  --success: var(--green-600);
+  --success-soft: #edf8f1;
+  --warning: var(--amber-600);
+  --warning-soft: var(--amber-50);
+  --danger: var(--red-600);
+  --danger-soft: #fdeeee;
+  --info: var(--amber-700);
+  --info-soft: var(--amber-50);
+
+  --hero-gradient: linear-gradient(120deg, var(--stone-50) 0%, var(--white) 55%, var(--amber-50) 100%);
+  --brand-gradient: linear-gradient(135deg, var(--amber-700), var(--amber-600));
+  --focus-shadow: 0 0 0 3px var(--amber-100);
+  --elev-1: 0 1px 2px rgba(59, 47, 47, 0.07);
+  --elev-2: 0 10px 30px rgba(59, 47, 47, 0.1);
+  --elev-3: 0 24px 64px rgba(59, 47, 47, 0.16);
+
+  --nav-bg: rgba(255, 253, 247, 0.9);
+  --nav-border: var(--stone-200);
+  --card-bg: var(--white);
+  --card-border: var(--stone-200);
+  --upload-bg: linear-gradient(180deg, var(--white), var(--stone-50));
+  --upload-border: var(--stone-200);
+  --upload-border-hover: var(--amber-600);
+  --tag-bg: var(--stone-100);
+  --tag-fg: var(--stone-600);
+  --bubble-user: var(--amber-700);
+  --bubble-user-text: var(--white);
+  --bubble-assistant: var(--white);
+  --timeline-line: var(--stone-200);
+  --timeline-dot: var(--amber-700);
+  --timeline-dot-done: var(--green-600);
+  --evidence-bg: var(--amber-50);
+  --evidence-border: var(--amber-100);
+}
+
+/* =========================================================
+   Component tokens — 组件层别名
+   ========================================================= */
+:root {
+  --page-max: 1440px;
+  --nav-height: 64px;
+  --sidebar-width: 264px;
+  --rail-width: 360px;
+
+  --btn-bg: var(--primary);
+  --btn-bg-hover: var(--primary-hover);
+  --btn-fg: var(--text-on-primary);
+  --btn-ghost-bg: transparent;
+  --btn-ghost-fg: var(--text-secondary);
+  --btn-ghost-hover-bg: var(--surface-2);
+  --btn-disabled-bg: var(--surface-2);
+  --btn-disabled-fg: var(--text-subtle);
+
+  --input-bg: var(--surface);
+  --input-border: var(--border-strong);
+  --input-border-focus: var(--primary);
+  --input-placeholder: var(--text-subtle);
+
+  --table-header-bg: var(--surface-2);
+  --table-row-hover: var(--surface-3);
+  --table-selected: var(--primary-soft);
+
+  --status-ready-bg: var(--success-soft);
+  --status-ready-fg: var(--success);
+  --status-progress-bg: var(--info-soft);
+  --status-progress-fg: var(--info);
+  --status-failed-bg: var(--danger-soft);
+  --status-failed-fg: var(--danger);
+  --status-idle-bg: var(--surface-2);
+  --status-idle-fg: var(--text-subtle);
+
+  --font-heading: var(--font-sans);
+}
+
+[data-theme="paper"] {
+  --font-heading: var(--font-serif);
+}

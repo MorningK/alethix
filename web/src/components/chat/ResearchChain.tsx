@@ -20,7 +20,7 @@ export function ResearchChain({ items }: ResearchChainProps) {
   }
 
   return (
-    <div className="flex flex-col gap-2">
+    <div className="paper-research-chain flex flex-col gap-2">
       <Typography.Text type="secondary" className="text-xs">
         共 {items.length} 轮调研，展开节点可查看详细说明
       </Typography.Text>

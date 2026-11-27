@@ -1,3 +1,4 @@
+import { PAPER_COLORS } from '@/theme/paperTheme';
 import type { Confidence, StopReason } from '@/types/ask';
 
 export interface StopReasonMeta {
@@ -52,9 +53,9 @@ export const CONFIDENCE_LABEL: Record<Confidence, string> = {
 };
 
 export const CONFIDENCE_COLOR: Record<Confidence, string> = {
-  high: 'success',
-  medium: 'processing',
-  low: 'warning',
+  high: PAPER_COLORS.success,
+  medium: PAPER_COLORS.primary,
+  low: PAPER_COLORS.warning,
 };
 
 const UNKNOWN_STOP_REASON_META: StopReasonMeta = {
