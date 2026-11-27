@@ -123,7 +123,7 @@ async def ask_stream(
                 },
             )
         except Exception as exc:  # noqa: BLE001
-            logger.warning(
+            logger.exception(
                 "流式问答执行失败",
                 extra=safe_extra(agent_run_id=agent_run_id, reason=type(exc).__name__),
             )

@@ -46,18 +46,27 @@ body {
   font-size: 14px;
 }
 
-/* 仅调研时间线节点使用轻微入场动效（200ms） */
-@keyframes node-enter {
-  from {
-    opacity: 0;
-    transform: translateY(6px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+/* Ant Design X 重构后的局部排版补充 */
+.research-chain-content {
+  white-space: pre-wrap;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--color-ink-muted);
 }
 
-.node-enter {
-  animation: node-enter 200ms ease-out both;
+.citation-markdown p {
+  margin: 0;
+}
+
+.citation-markdown ul,
+.citation-markdown ol {
+  margin: 4px 0;
+  padding-left: 18px;
+}
+
+.citation-markdown pre {
+  overflow-x: auto;
+  padding: 8px;
+  border-radius: 6px;
+  background: #f1f5f9;
 }

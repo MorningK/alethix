@@ -8,6 +8,8 @@ interface StreamState {
   running: boolean;
   error: string | null;
   finalAnswer: FinalAnswerEvent | null;
+  currentQuestion: string | null;
+  aborted: boolean;
 }
 
 /**
@@ -22,18 +24,27 @@ export function useAskStream() {
     running: false,
     error: null,
     finalAnswer: null,
+    currentQuestion: null,
+    aborted: false,
   });
 
   const stop = useCallback(() => {
     controllerRef.current?.abort();
     controllerRef.current = null;
-    setState((prev) => ({ ...prev, running: false }));
+    setState((prev) => ({ ...prev, running: false, aborted: true }));
   }, []);
 
   const start = useCallback((payload: AskRequest, onFinal?: (event: FinalAnswerEvent) => void) => {
     controllerRef.current?.abort();
     lastEventIdRef.current = null;
-    setState({ timeline: [], running: true, error: null, finalAnswer: null });
+    setState({
+      timeline: [],
+      running: true,
+      error: null,
+      finalAnswer: null,
+      currentQuestion: payload.question,
+      aborted: false,
+    });
 
     controllerRef.current = askStream(payload, {
       onEvent: (event: ResearchEvent, eventId?: number) => {
@@ -99,12 +110,37 @@ export function useAskStream() {
         setState((prev) => ({ ...prev, running: false, error: message }));
       },
       onClose: () => {
-        setState((prev) => ({ ...prev, running: false }));
+        setState((prev) => ({
+          ...prev,
+          running: false,
+          aborted: prev.running && !prev.finalAnswer && !prev.error,
+        }));
       },
     });
   }, []);
 
+  const reset = useCallback(() => {
+    lastEventIdRef.current = null;
+    setState({
+      timeline: [],
+      running: false,
+      error: null,
+      finalAnswer: null,
+      currentQuestion: null,
+      aborted: false,
+    });
+  }, []);
+
+  const settle = useCallback(() => {
+    setState((prev) => ({
+      ...prev,
+      running: false,
+      finalAnswer: null,
+      currentQuestion: null,
+    }));
+  }, []);
+
   useEffect(() => () => controllerRef.current?.abort(), []);
 
-  return { ...state, start, stop };
+  return { ...state, start, stop, reset, settle };
 }

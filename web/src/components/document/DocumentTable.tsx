@@ -6,7 +6,7 @@ import type { DocumentBrief, DocumentStatus, DocumentStatusResponse } from '@/ty
 import { formatFileSize, formatTime } from '@/utils/format';
 
 function FailureDetail({ code, message }: { code: string; message: string }) {
-  return <Alert type="error" showIcon message={`${code}：${message}`} className="my-2" />;
+  return <Alert type="error" showIcon title={`${code}：${message}`} className="my-2" />;
 }
 
 function renderExpandedRow(

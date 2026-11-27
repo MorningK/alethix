@@ -14,6 +14,8 @@
     "format:check": "oxfmt --check src"
   },
   "dependencies": {
+    "@ant-design/x": "2.10.0",
+    "@ant-design/x-markdown": "2.10.0",
     "@microsoft/fetch-event-source": "2.0.1",
     "@tanstack/react-query": "5.102.8",
     "antd": "6.6.3",

@@ -1,15 +1,16 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { Alert, Button, Card, Tag, Typography } from 'antd';
 import { useParams } from 'react-router-dom';
-import { AnswerPanel } from '@/components/chat/AnswerPanel';
-import { AskComposer } from '@/components/chat/AskComposer';
-import { MessageHistory } from '@/components/chat/MessageHistory';
-import { ResearchTimeline } from '@/components/chat/ResearchTimeline';
+import { ChatComposer } from '@/components/chat/ChatComposer';
+import { ChatMessageList } from '@/components/chat/ChatMessageList';
+import { ResearchChain } from '@/components/chat/ResearchChain';
 import { useAskStream } from '@/hooks/useAskStream';
+import { useSessionMessages } from '@/hooks/useSession';
 import { useAppStore } from '@/store/useAppStore';
+import { toBubbleItems, toResearchChainItems } from '@/utils/chatAdapters';
 
-/** 问答调研页：F3 的时间线、答案引用、追问与停止交互。 */
+/** Ant Design X 问答调研页：对话气泡 + 调研思维链 + Sender。 */
 export function ChatPage() {
   const { sessionId } = useParams();
   const queryClient = useQueryClient();
@@ -19,16 +20,22 @@ export function ChatPage() {
   const activeSessionId = sessionId ?? currentSessionId;
   const session = currentSession?.session_id === activeSessionId ? currentSession : null;
   const allScopeIds = session?.default_document_ids ?? selectedDocIds;
+
+  const [value, setValue] = useState('');
   const [excluded, setExcluded] = useState<{ sessionId: string | null; ids: string[] }>({
     sessionId: null,
     ids: [],
   });
-  const lastSessionRef = useRef<string | null>(null);
-  const { timeline, running, error, finalAnswer, start, stop } = useAskStream();
+  const lastSessionRef = useRef<string | null | undefined>(undefined);
+
+  const { data: historyData } = useSessionMessages(activeSessionId);
+  const timelineState = useAskStream();
+  const { start, stop, settle } = timelineState;
 
   useEffect(() => {
-    if (lastSessionRef.current !== activeSessionId) {
-      lastSessionRef.current = activeSessionId;
+    const previousSessionId = lastSessionRef.current;
+    lastSessionRef.current = activeSessionId;
+    if (previousSessionId !== undefined && previousSessionId !== activeSessionId) {
       stop();
     }
   }, [activeSessionId, stop]);
@@ -36,14 +43,16 @@ export function ChatPage() {
   const excludedDocIds = excluded.sessionId === activeSessionId ? excluded.ids : [];
   const scopeIds = allScopeIds.filter((id) => !excludedDocIds.includes(id));
 
-  const handleFinal = useCallback(() => {
+  const handleFinal = useCallback(async () => {
     if (activeSessionId) {
-      queryClient.invalidateQueries({ queryKey: ['messages', activeSessionId] });
+      await queryClient.invalidateQueries({ queryKey: ['messages', activeSessionId] });
     }
-  }, [activeSessionId, queryClient]);
+    settle();
+  }, [activeSessionId, queryClient, settle]);
 
   const handleSubmit = (question: string) => {
     if (!activeSessionId) return;
+    setValue('');
     start(
       {
         session_id: activeSessionId,
@@ -55,10 +64,35 @@ export function ChatPage() {
     );
   };
 
+  const bubbleItems = useMemo(
+    () =>
+      toBubbleItems({
+        history: historyData?.items ?? [],
+        currentQuestion: timelineState.currentQuestion,
+        running: timelineState.running,
+        finalAnswer: timelineState.finalAnswer,
+        error: timelineState.error,
+        aborted: timelineState.aborted,
+      }),
+    [
+      historyData?.items,
+      timelineState.currentQuestion,
+      timelineState.running,
+      timelineState.finalAnswer,
+      timelineState.error,
+      timelineState.aborted,
+    ],
+  );
+
+  const chainItems = useMemo(
+    () => toResearchChainItems(timelineState.timeline, timelineState.finalAnswer),
+    [timelineState.timeline, timelineState.finalAnswer],
+  );
+
   return (
-    <div className="mx-auto flex w-full max-w-[1200px] flex-col gap-5">
-      <div className="rounded-xl bg-gradient-to-r from-[#1D4ED8] to-[#3B82F6] px-6 py-5 text-white shadow-sm">
-        <Typography.Title level={3} className="mb-1 text-white">
+    <div className="mx-auto flex h-[calc(100vh-104px)] min-h-[620px] w-full max-w-7xl flex-col gap-4">
+      <div className="shrink-0 rounded-xl bg-gradient-to-r from-[#1D4ED8] to-[#3B82F6] px-6 py-4 text-white shadow-sm">
+        <Typography.Title level={4} className="mb-1 text-white">
           智能问答 · 调研工作台
         </Typography.Title>
         <Typography.Text className="text-white/80">
@@ -77,8 +111,8 @@ export function ChatPage() {
 
       <Card
         title="检索范围"
-        className="border-slate-100 shadow-sm"
-        styles={{ body: { padding: 16 } }}
+        className="shrink-0 border-slate-100 shadow-sm"
+        styles={{ body: { padding: 12 } }}
       >
         <div className="flex flex-wrap items-center gap-2">
           {scopeIds.length > 0 ? (
@@ -86,10 +120,10 @@ export function ChatPage() {
               <Tag
                 key={id}
                 closable
+                color="blue"
                 onClose={() =>
                   setExcluded({ sessionId: activeSessionId, ids: [...excludedDocIds, id] })
                 }
-                color="blue"
               >
                 {id.slice(0, 8)}…
               </Tag>
@@ -114,29 +148,43 @@ export function ChatPage() {
         </div>
       </Card>
 
-      <AskComposer
-        running={running}
-        disabled={!activeSessionId}
-        onSubmit={handleSubmit}
-        onStop={stop}
-      />
+      {timelineState.error && (
+        <Alert type="error" showIcon title="调研未能完成" description={timelineState.error} />
+      )}
+      {timelineState.aborted && !timelineState.error && (
+        <Alert
+          type="warning"
+          showIcon
+          message="调研已停止"
+          description="本次未生成完整答案，可重新提问继续调研。"
+        />
+      )}
 
-      {error && <Alert type="error" showIcon message="调研未能完成" description={error} />}
+      <div className="flex min-h-0 flex-1 gap-4">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-slate-100 bg-white shadow-sm">
+          <div className="min-h-0 flex-1">
+            <ChatMessageList items={bubbleItems} />
+          </div>
+          <div className="shrink-0 border-t border-slate-100 p-4">
+            <ChatComposer
+              value={value}
+              running={timelineState.running}
+              disabled={!activeSessionId}
+              showPrompts={bubbleItems.length === 0 && !timelineState.running}
+              onChange={setValue}
+              onSubmit={handleSubmit}
+              onCancel={stop}
+            />
+          </div>
+        </div>
 
-      <div className="flex flex-col gap-5 xl:flex-row">
-        <div className="xl:w-[320px] xl:shrink-0">
-          <MessageHistory sessionId={activeSessionId} />
-        </div>
-        <div className="flex min-w-0 flex-1 flex-col gap-5">
-          <Card
-            title="调研时间线"
-            className="border-slate-100 shadow-sm"
-            styles={{ body: { padding: 16 } }}
-          >
-            <ResearchTimeline nodes={timeline} running={running} />
-          </Card>
-          {finalAnswer && <AnswerPanel answer={finalAnswer} />}
-        </div>
+        <Card
+          title="调研过程"
+          className="hidden w-[340px] shrink-0 overflow-auto border-slate-100 shadow-sm xl:block"
+          styles={{ body: { padding: 16 } }}
+        >
+          <ResearchChain items={chainItems} />
+        </Card>
       </div>
     </div>
   );

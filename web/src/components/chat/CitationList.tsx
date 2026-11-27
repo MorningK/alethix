@@ -1,4 +1,5 @@
 import { Collapse, Empty, Typography } from 'antd';
+import { XMarkdown } from '@ant-design/x-markdown';
 import type { Citation } from '@/types/document';
 
 interface CitationListProps {
@@ -6,7 +7,7 @@ interface CitationListProps {
   defaultOpen?: boolean;
 }
 
-/** 引用区：默认折叠，展示文件名 / 页码 / 章节 / 原文摘录（FE-CHAT-5）。 */
+/** 引用区：元数据保持纯文本，原文摘录用 XMarkdown 紧凑渲染。 */
 export function CitationList({ citations, defaultOpen = false }: CitationListProps) {
   if (citations.length === 0) {
     return (
@@ -48,9 +49,12 @@ export function CitationList({ citations, defaultOpen = false }: CitationListPro
                       </Typography.Text>
                     )}
                   </div>
-                  <Typography.Text className="border-brand-light text-ink-muted border-l-2 pl-3 text-xs leading-relaxed">
-                    {citation.quote}
-                  </Typography.Text>
+                  <XMarkdown
+                    content={citation.quote}
+                    className="citation-markdown text-ink-muted border-brand-light border-l-2 pl-3 text-xs"
+                    openLinksInNewTab
+                    escapeRawHtml
+                  />
                 </div>
               ))}
             </div>
